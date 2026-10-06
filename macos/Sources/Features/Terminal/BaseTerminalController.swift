@@ -53,6 +53,13 @@ class BaseTerminalController: NSWindowController,
         }
     }
 
+    /// Every surface this controller owns. This is the surface tree for most
+    /// controllers, but subclasses can own surfaces that aren't currently
+    /// displayed, such as the quick terminal's background tabs.
+    var allSurfaces: [Ghostty.SurfaceView] {
+        Array(surfaceTree)
+    }
+
     /// This can be set to show/hide the command palette.
     @Published var commandPaletteIsShowing: Bool = false
 
@@ -247,18 +254,18 @@ class BaseTerminalController: NSWindowController,
     /// view relationship.
     static func controller(owning surface: Ghostty.SurfaceView) -> BaseTerminalController? {
         if let controller = surfaceControllers.object(forKey: surface),
-           controller.surfaceTree.contains(surface) {
+           controller.allSurfaces.contains(surface) {
             return controller
         }
 
         if let controller = surface.window?.windowController as? BaseTerminalController,
-           controller.surfaceTree.contains(surface) {
+           controller.allSurfaces.contains(surface) {
             return controller
         }
 
         return NSApp.windows
             .compactMap { $0.windowController as? BaseTerminalController }
-            .first { $0.surfaceTree.contains(surface) }
+            .first { $0.allSurfaces.contains(surface) }
     }
 
     private static func updateSurfaceControllers(
@@ -334,7 +341,7 @@ class BaseTerminalController: NSWindowController,
     ///
     /// Subclasses should call super first.
     func surfaceTreeDidChange(from: SplitTree<Ghostty.SurfaceView>, to: SplitTree<Ghostty.SurfaceView>) {
-        for surfaceView in from where !to.contains(surfaceView) {
+        for surfaceView in from where !allSurfaces.contains(surfaceView) {
             cancelPendingClipboardConfirmation(for: surfaceView)
         }
 
@@ -349,7 +356,7 @@ class BaseTerminalController: NSWindowController,
     /// what surface is focused. This must be called whenever a surface OR window changes focus.
     func syncFocusToSurfaceTree() {
         var newlyFocused: Ghostty.SurfaceView?
-        for surfaceView in surfaceTree {
+        for surfaceView in allSurfaces {
             // Our focus state requires that this window is key and our currently
             // focused surface is the surface in this view.
             let focused: Bool = (window?.isKeyWindow ?? false) &&
@@ -1199,13 +1206,14 @@ class BaseTerminalController: NSWindowController,
         guard window != nil else { return true }
 
         // If we have no surfaces, close.
-        if surfaceTree.isEmpty { return true }
+        let surfaces = allSurfaces
+        if surfaces.isEmpty { return true }
 
         // If we already have an alert, continue with it
         guard alert == nil else { return false }
 
         // If our surfaces don't require confirmation, close.
-        if !surfaceTree.contains(where: { $0.needsConfirmQuit }) { return true }
+        if !surfaces.contains(where: { $0.needsConfirmQuit }) { return true }
 
         return false
     }
@@ -1283,8 +1291,10 @@ class BaseTerminalController: NSWindowController,
     }
 
     private func syncSurfaceTreeOcclusionState() {
-        let visible = self.window?.occlusionState.contains(.visible) ?? false
-        for view in surfaceTree {
+        let windowVisible = self.window?.occlusionState.contains(.visible) ?? false
+        for view in allSurfaces {
+            // Surfaces outside of the tree aren't displayed, e.g. background tabs.
+            let visible = windowVisible && surfaceTree.contains(view)
             if let surface = view.surface, view.isWindowVisible != visible {
                 ghostty_surface_set_occlusion(surface, visible)
                 view.isWindowVisible = visible
@@ -1530,7 +1540,7 @@ extension BaseTerminalController: NSMenuItemValidation {
         guard scheme != appliedColorScheme else {
             return
         }
-        for surfaceView in surfaceTree {
+        for surfaceView in allSurfaces {
             if let surface = surfaceView.surface {
                 ghostty_surface_set_color_scheme(surface, scheme)
             }

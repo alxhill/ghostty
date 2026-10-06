@@ -961,7 +961,11 @@ extension Ghostty {
                 guard let surface = target.target.surface else { return }
                 guard let surfaceView = self.surfaceView(from: surface) else { return }
                 guard let appState = self.appState(fromView: surfaceView) else { return }
-                guard appState.config.windowDecorations else {
+
+                // The quick terminal draws its own tab bar so it doesn't need
+                // window decorations.
+                guard appState.config.windowDecorations ||
+                        surfaceView.window?.windowController is QuickTerminalController else {
                     let alert = NSAlert()
                     alert.messageText = "Tabs are disabled"
                     alert.informativeText = "Enable window decorations to use tabs"
@@ -1266,7 +1270,7 @@ extension Ghostty {
                     guard let surfaceView = self.surfaceView(from: surface) else { return false }
 
                     // See gotoTab for notes on this check.
-                    guard (surfaceView.window?.tabGroup?.windows.count ?? 0) > 1 else { return false }
+                    guard tabCount(containing: surfaceView) > 1 else { return false }
 
                     NotificationCenter.default.post(
                         name: .ghosttyMoveTab,
@@ -1295,9 +1299,14 @@ extension Ghostty {
                     guard let surface = target.target.surface else { return false }
                     guard let surfaceView = self.surfaceView(from: surface) else { return false }
 
+                    if let controller = surfaceView.window?.windowController as? QuickTerminalController {
+                        guard let tab = controller.selectedTab else { return false }
+                        return controller.moveTabToNewWindow(tab)
+                    }
+
                     // See gotoTab for notes on this check. A lone tab is already
                     // a window of its own, so there is nothing to move.
-                    guard (surfaceView.window?.tabGroup?.windows.count ?? 0) > 1 else { return false }
+                    guard tabCount(containing: surfaceView) > 1 else { return false }
 
                     surfaceView.window?.moveTabToNewWindow(nil)
 
@@ -1306,6 +1315,16 @@ extension Ghostty {
                 }
 
                 return true
+        }
+
+        /// The number of tabs alongside the given surface, either native window
+        /// tabs or the quick terminal's own tabs.
+        private static func tabCount(containing surfaceView: SurfaceView) -> Int {
+            if let controller = surfaceView.window?.windowController as? QuickTerminalController {
+                return controller.tabs.count
+            }
+
+            return surfaceView.window?.tabGroup?.windows.count ?? 0
         }
 
         private static func gotoTab(
@@ -1323,7 +1342,7 @@ extension Ghostty {
 
                     // Similar to goto_split (see comment there) about our performability,
                     // we should make this more accurate later.
-                    guard (surfaceView.window?.tabGroup?.windows.count ?? 0) > 1 else { return false }
+                    guard tabCount(containing: surfaceView) > 1 else { return false }
 
                     NotificationCenter.default.post(
                         name: Notification.ghosttyGotoTab,

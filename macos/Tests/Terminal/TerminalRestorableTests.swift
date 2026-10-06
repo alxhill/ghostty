@@ -9,7 +9,7 @@ struct TerminalRestorableTests {
         #expect(TerminalRestorableState.version == 7)
         #expect(TerminalRestorableState.minimumVersion == 5)
 
-        #expect(QuickTerminalRestorableState.version == 1)
+        #expect(QuickTerminalRestorableState.version == 2)
         #expect(QuickTerminalRestorableState.minimumVersion == 1)
     }
 
@@ -35,6 +35,54 @@ struct TerminalRestorableTests {
         #expect(state.screenStateEntries.isEmpty)
         #expect(state.surfaceTree.contains(where: { $0.id.uuidString == "2F2F2D93-944C-474A-83BA-4DC1868C3EB9" }))
         #expect(state.surfaceTree.contains(where: { $0.id.uuidString == "994C673F-B4C5-49EE-B044-65006652636D" }))
+
+        // Version 1 had a single tab.
+        #expect(state.tabs == nil)
+        let tabs = state.allTabs
+        try #require(tabs.count == 1)
+        #expect(tabs[0].focusedSurface == "123")
+        #expect(tabs[0].surfaceTree.contains(where: { $0.id.uuidString == "2F2F2D93-944C-474A-83BA-4DC1868C3EB9" }))
+    }
+
+    @MainActor
+    @Test func quickTerminalRestorableFromV2() throws {
+        /* v2
+        let tree = try SplitTreeTests.makeHorizontalSplit()
+        let single = MockView()
+        let state = DummyQuickTerminalRestorableState(
+            .init(
+                focusedSurface: nil,
+                surfaceTree: .init(),
+                screenStateEntries: [:],
+                tabs: [
+                    .init(focusedSurface: tree.2.id.uuidString, surfaceTree: tree.0, titleOverride: nil),
+                    .init(focusedSurface: single.id.uuidString, surfaceTree: .init(view: single), titleOverride: "tabs"),
+                ],
+                selectedTab: 1,
+            )
+        )
+        let data = try archive(CodableBridge(state), className: "CodableBridge<QuickTerminal>")
+        print(data.base64EncodedString())
+        print(tree.1.id)
+        print(tree.2.id)
+        print(single.id)
+        */
+
+        let decoded: CodableBridge<DummyQuickTerminalRestorableState> = try unarchive(v2QTData, className: "CodableBridge<QuickTerminal>")
+        let state = decoded.value.internalState
+
+        #expect(state.surfaceTree.isEmpty)
+        #expect(state.selectedTab == 1)
+
+        let tabs = state.allTabs
+        try #require(tabs.count == 2)
+        #expect(tabs[0].focusedSurface == "D90856CB-AEA3-4B92-AA80-9FBF61584A3B")
+        #expect(tabs[0].titleOverride == nil)
+        #expect(tabs[0].surfaceTree.contains(where: { $0.id.uuidString == "95B80686-2EE6-4B6A-97BA-EC53D1B08322" }))
+        #expect(tabs[0].surfaceTree.contains(where: { $0.id.uuidString == "D90856CB-AEA3-4B92-AA80-9FBF61584A3B" }))
+        #expect(tabs[1].focusedSurface == "572E28CC-466F-4086-8937-E9979611F160")
+        #expect(tabs[1].titleOverride == "tabs")
+        #expect(tabs[1].surfaceTree.contains(where: { $0.id.uuidString == "572E28CC-466F-4086-8937-E9979611F160" }))
     }
 
     // To generate old data: created a dummy class, archive, and copy the printed result
@@ -194,6 +242,12 @@ struct DummyQuickTerminalRestorableState: TerminalRestorable {
 
 private let v1QTData = Data(base64Encoded: """
     YnBsaXN0MDDUAQIDBAUGBwpYJHZlcnNpb25ZJGFyY2hpdmVyVCR0b3BYJG9iamVjdHMSAAGGoF8QD05TS2V5ZWRBcmNoaXZlctEICVRyb290gAGkCwwRElUkbnVsbNINDg8QVGRhdGFWJGNsYXNzgAKAA08RA6hicGxpc3QwMNQBAgMEBQYHClgkdmVyc2lvblkkYXJjaGl2ZXJUJHRvcFgkb2JqZWN0cxIAAYagXxAPTlNLZXllZEFyY2hpdmVy0QgJVXZhbHVlgAGvECALDBkaGxwfJicvMDEyODlFRkdISU9QVldYXF1jaWpwcVUkbnVsbNMNDg8QFBhXTlMua2V5c1pOUy5vYmplY3RzViRjbGFzc6MREhOAAoADgASjFRYXgAWAB4AIgBhfEBJzY3JlZW5TdGF0ZUVudHJpZXNeZm9jdXNlZFN1cmZhY2Vbc3VyZmFjZVRyZWXSDg8dHqCABtIgISIjWiRjbGFzc25hbWVYJGNsYXNzZXNeTlNNdXRhYmxlQXJyYXmjIiQlV05TQXJyYXlYTlNPYmplY3RTMTIz0w0ODygrGKIpKoAJgAqiLC2AC4AMgBhXdmVyc2lvblRyb290EAHTDQ4PMzUYoTSADaE2gA6AGFVzcGxpdNMNDg86PxikOzw9PoAPgBCAEYASpEBBQkOAE4AZgBqAHYAYVXJpZ2h0VXJhdGlvVGxlZnRZZGlyZWN0aW9u0w0OD0pMGKFLgBShTYAVgBhUdmlld9MNDg9RUxihUoAWoVSAF4AYUmlkXxAkOTk0QzY3M0YtQjRDNS00OUVFLUIwNDQtNjUwMDY2NTI2MzZE0iAhWVpfEBNOU011dGFibGVEaWN0aW9uYXJ5o1lbJVxOU0RpY3Rpb25hcnkjP+AAAAAAAADTDQ4PXmAYoUuAFKFhgBuAGNMNDg9kZhihUoAWoWeAHIAYXxAkMkYyRjJEOTMtOTQ0Qy00NzRBLTgzQkEtNERDMTg2OEMzRUI50w0OD2ttGKFsgB6hboAfgBhaaG9yaXpvbnRhbNMNDg9ycxigoIAYAAgAEQAaACQAKQAyADcASQBMAFIAVAB3AH0AhACMAJcAngCiAKQApgCoAKwArgCwALIAtADJANgA5ADpAOoA7ADxAPwBBQEUARgBIAEpAS0BNAE3ATkBOwE+AUABQgFEAUwBUQFTAVoBXAFeAWABYgFkAWoBcQF2AXgBegF8AX4BgwGFAYcBiQGLAY0BkwGZAZ4BqAGvAbEBswG1AbcBuQG+AcUBxwHJAcsBzQHPAdIB+QH+AhQCGAIlAi4CNQI3AjkCOwI9Aj8CRgJIAkoCTAJOAlACdwJ+AoACggKEAoYCiAKTApoCmwKcAAAAAAAAAgEAAAAAAAAAdQAAAAAAAAAAAAAAAAAAAp7RExRaJGNsYXNzbmFtZV8QHENvZGFibGVCcmlkZ2U8UXVpY2tUZXJtaW5hbD4ACAARABoAJAApADIANwBJAEwAUQBTAFgAXgBjAGgAbwBxAHMEHwQiBC0AAAAAAAACAQAAAAAAAAAVAAAAAAAAAAAAAAAAAAAETA==
+    """)!
+
+// MARK: - QuickTerminal V2 (tabs)
+
+private let v2QTData = Data(base64Encoded: """
+    YnBsaXN0MDDUAQIDBAUGBwpYJHZlcnNpb25ZJGFyY2hpdmVyVCR0b3BYJG9iamVjdHMSAAGGoF8QD05TS2V5ZWRBcmNoaXZlctEICVRyb290gAGkCwwRElUkbnVsbNINDg8QVGRhdGFWJGNsYXNzgAKAA08RBVhicGxpc3QwMNQBAgMEBQYHClgkdmVyc2lvblkkYXJjaGl2ZXJUJHRvcFgkb2JqZWN0cxIAAYagXxAPTlNLZXllZEFyY2hpdmVy0QgJVXZhbHVlgAGvEC0LDBscHR4fJSYnLjM7PD1FRkxNWVpbXF1jZGprbG1zeXqAgYWPkJGSmqCmp6tVJG51bGzTDQ4PEBUaV05TLmtleXNaTlMub2JqZWN0c1YkY2xhc3OkERITFIACgAOABIAFpBYXGBmABoAKgAiALIAJW3N1cmZhY2VUcmVlVHRhYnNbc2VsZWN0ZWRUYWJfEBJzY3JlZW5TdGF0ZUVudHJpZXPTDQ4PICIaoSGAB6EYgAiACVd2ZXJzaW9uEAHSKCkqK1okY2xhc3NuYW1lWCRjbGFzc2VzXxATTlNNdXRhYmxlRGljdGlvbmFyeaMqLC1cTlNEaWN0aW9uYXJ5WE5TT2JqZWN00g4PLzKiMDGAC4AjgCvTDQ4PNDcaojURgAyAAqI4OYANgA6ACV5mb2N1c2VkU3VyZmFjZV8QJEQ5MDg1NkNCLUFFQTMtNEI5Mi1BQTgwLTlGQkY2MTU4NEEzQtMNDg8+QRqiIUCAB4APohhDgAiAEIAJVHJvb3TTDQ4PR0kaoUiAEaFKgBKACVVzcGxpdNMNDg9OUxqkT1BRUoATgBSAFYAWpFRVVleAF4AcgB2AIIAJVXJpZ2h0VXJhdGlvVGxlZnRZZGlyZWN0aW9u0w0OD15gGqFfgBihYYAZgAlUdmlld9MNDg9lZxqhZoAaoWiAG4AJUmlkXxAkRDkwODU2Q0ItQUVBMy00QjkyLUFBODAtOUZCRjYxNTg0QTNCIz/gAAAAAAAA0w0OD25wGqFfgBihcYAegAnTDQ4PdHYaoWaAGqF3gB+ACV8QJDk1QjgwNjg2LTJFRTYtNEI2QS05N0JBLUVDNTNEMUIwODMyMtMNDg97fRqhfIAhoX6AIoAJWmhvcml6b250YWzTDQ4PgoMaoKCACdMNDg+Gihqjh4gRgCSAJYACoxKMjYADgCaAJ4AJXXRpdGxlT3ZlcnJpZGVeZm9jdXNlZFN1cmZhY2VfECQ1NzJFMjhDQy00NjZGLTQwODYtODkzNy1FOTk3OTYxMUYxNjDTDQ4Pk5YaoiFAgAeAD6IYmIAIgCiACdMNDg+bnRqhX4AYoZ6AKYAJ0w0OD6GjGqFmgBqhpIAqgAlfECQ1NzJFMjhDQy00NjZGLTQwODYtODkzNy1FOTk3OTYxMUYxNjDSKCmoqV5OU011dGFibGVBcnJheaOoqi1XTlNBcnJhedIOD6wyoIArAAgAEQAaACQAKQAyADcASQBMAFIAVACEAIoAkQCZAKQAqwCwALIAtAC2ALgAvQC/AMEAwwDFAMcA0wDYAOQA+QEAAQIBBAEGAQgBCgESARQBGQEkAS0BQwFHAVQBXQFiAWUBZwFpAWsBcgF1AXcBeQF8AX4BgAGCAZEBuAG/AcIBxAHGAckBywHNAc8B1AHbAd0B3wHhAeMB5QHrAfIB9wH5AfsB/QH/AgQCBgIIAgoCDAIOAhQCGgIfAikCMAIyAjQCNgI4AjoCPwJGAkgCSgJMAk4CUAJTAnoCgwKKAowCjgKQApIClAKbAp0CnwKhAqMCpQLMAtMC1QLXAtkC2wLdAugC7wLwAvEC8wL6Av4DAAMCAwQDCAMKAwwDDgMQAx4DLQNUA1sDXgNgA2IDZQNnA2kDawNyA3QDdgN4A3oDfAODA4UDhwOJA4sDjQO0A7kDyAPMA9QD2QPaAAAAAAAAAgEAAAAAAAAArgAAAAAAAAAAAAAAAAAAA9zRExRaJGNsYXNzbmFtZV8QHENvZGFibGVCcmlkZ2U8UXVpY2tUZXJtaW5hbD4ACAARABoAJAApADIANwBJAEwAUQBTAFgAXgBjAGgAbwBxAHMFzwXSBd0AAAAAAAACAQAAAAAAAAAVAAAAAAAAAAAAAAAAAAAF/A==
     """)!
 
 // MARK: - Terminal V5 (1.2.3)
