@@ -2669,7 +2669,8 @@ const Action = struct {
         defer alloc.free(path);
 
         switch (value) {
-            .os_open => {
+            // GTK has no settings window so we open the file instead.
+            .os_open, .settings => {
                 // Open it using openUrl. "path" isn't actually a URL but
                 // at the time of writing that works just fine for GTK.
                 openUrl(self, .{ .kind = .text, .url = path });

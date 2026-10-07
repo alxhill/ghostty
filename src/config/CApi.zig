@@ -7,6 +7,8 @@ const String = @import("../main_c.zig").String;
 const Config = @import("Config.zig");
 const c_get = @import("c_get.zig");
 const edit = @import("edit.zig");
+const file_load = @import("file_load.zig");
+const schema = @import("schema.zig");
 const Key = @import("key.zig").Key;
 
 const log = std.log.scoped(.config);
@@ -141,6 +143,76 @@ export fn ghostty_config_open_path() String {
     return .fromSlice(path);
 }
 
+/// The paths of the default configuration files, separated by newlines,
+/// in the order ghostty_config_load_default_files loads them. Paths are
+/// included whether or not they exist. The result must be freed with
+/// ghostty_string_free.
+export fn ghostty_config_default_file_paths() String {
+    return defaultFilePaths(global.alloc()) catch |err| {
+        log.err("error getting default config file paths err={}", .{err});
+        return .empty;
+    };
+}
+
+fn defaultFilePaths(alloc: std.mem.Allocator) !String {
+    var arena: std.heap.ArenaAllocator = .init(alloc);
+    defer arena.deinit();
+    const alloc_arena = arena.allocator();
+
+    var paths: std.ArrayList([]const u8) = .empty;
+    try paths.append(alloc_arena, try file_load.legacyDefaultXdgPath(alloc_arena));
+    try paths.append(alloc_arena, try file_load.defaultXdgPath(alloc_arena));
+    if (comptime builtin.os.tag == .macos) {
+        try paths.append(alloc_arena, try file_load.legacyDefaultAppSupportPath(alloc_arena));
+        try paths.append(alloc_arena, try file_load.defaultAppSupportPath(alloc_arena));
+    }
+
+    return .fromSlice(try std.mem.joinZ(alloc, "\n", paths.items));
+}
+
+/// The number of configuration options that can be described with
+/// ghostty_config_option.
+export fn ghostty_config_option_count() usize {
+    return schema.options.len;
+}
+
+/// Describe the configuration option at the given index. Returns false
+/// if the index is out of range. All returned strings are static.
+export fn ghostty_config_option(idx: usize, out: *schema.Option.C) bool {
+    if (idx >= schema.options.len) return false;
+    out.* = schema.options[idx].cval();
+    return true;
+}
+
+/// Format the value of the given key as it would be written in a
+/// configuration file, excluding the key. Repeatable options have one
+/// value per line. The result must be freed with ghostty_string_free.
+export fn ghostty_config_format_value(
+    self: *Config,
+    key_str: [*]const u8,
+    len: usize,
+) String {
+    const key = std.meta.stringToEnum(Key, key_str[0..len]) orelse return .empty;
+    const value = schema.formatValue(global.alloc(), self, key) catch |err| {
+        log.err("error formatting config value err={}", .{err});
+        return .empty;
+    };
+
+    return .fromSlice(value);
+}
+
+/// Returns true if the value of the given key differs between the two
+/// configurations, e.g. to compare against a default configuration.
+export fn ghostty_config_value_changed(
+    self: *Config,
+    other: *Config,
+    key_str: [*]const u8,
+    len: usize,
+) bool {
+    const key = std.meta.stringToEnum(Key, key_str[0..len]) orelse return false;
+    return schema.changed(self, other, key);
+}
+
 /// Sync with ghostty_diagnostic_s
 const Diagnostic = extern struct {
     message: [*:0]const u8 = "",
@@ -252,7 +324,11 @@ test "ghostty_config_trigger: default keybind" {
 
     // Default commands should be fetchable through config_trigger_
     {
-        const trigger = try config_trigger_(&cfg, "open_config");
+        const action = if (comptime builtin.target.os.tag.isDarwin())
+            "open_config:settings"
+        else
+            "open_config";
+        const trigger = try config_trigger_(&cfg, action);
         try testing.expectEqual(.unicode, trigger.tag);
         try testing.expectEqual(@as(u32, ','), trigger.key.unicode);
     }
@@ -277,4 +353,51 @@ test "ghostty_config_trigger: default keybind" {
         try testing.expectEqual(.physical, trigger.tag);
         try testing.expectEqual(.unidentified, trigger.key.physical);
     }
+}
+
+test "ghostty_config_default_file_paths" {
+    const testing = std.testing;
+
+    const str = ghostty_config_default_file_paths();
+    defer str.deinit();
+    const paths = str.ptr.?[0..str.len];
+
+    var it = std.mem.splitScalar(u8, paths, '\n');
+    const legacy_xdg = it.next().?;
+    const xdg = it.next().?;
+    try testing.expect(std.mem.endsWith(u8, legacy_xdg, "ghostty/config"));
+    try testing.expect(std.mem.endsWith(u8, xdg, "ghostty/config.ghostty"));
+    if (comptime builtin.os.tag == .macos) {
+        try testing.expect(std.mem.endsWith(u8, it.next().?, "/config"));
+        try testing.expect(std.mem.endsWith(u8, it.next().?, "/config.ghostty"));
+    }
+    try testing.expect(it.next() == null);
+}
+
+test "ghostty_config_format_value" {
+    const testing = std.testing;
+
+    var cfg = try Config.default(testing.allocator);
+    defer cfg.deinit();
+    cfg.@"font-size" = 15;
+
+    const key = "font-size";
+    const str = ghostty_config_format_value(&cfg, key, key.len);
+    defer str.deinit();
+    try testing.expectEqualStrings("15", str.ptr.?[0..str.len]);
+
+    const unknown = "not-a-real-key";
+    const empty = ghostty_config_format_value(&cfg, unknown, unknown.len);
+    try testing.expect(empty.ptr == null);
+}
+
+test "ghostty_config_option" {
+    const testing = std.testing;
+
+    try testing.expect(ghostty_config_option_count() > 0);
+
+    var opt: schema.Option.C = undefined;
+    try testing.expect(ghostty_config_option(0, &opt));
+    try testing.expect(std.mem.span(opt.name).len > 0);
+    try testing.expect(!ghostty_config_option(ghostty_config_option_count(), &opt));
 }

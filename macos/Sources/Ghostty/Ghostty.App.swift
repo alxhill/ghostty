@@ -28,7 +28,7 @@ extension Ghostty {
         @Published private(set) var config: Config
 
         /// Preferred config file than the default ones
-        private var configPath: String?
+        private(set) var configPath: String?
         /// The ghostty app instance. We only have one of these for the entire app, although I guess
         /// in theory you can have multiple... I don't know why you would...
         @Published var app: ghostty_app_t? {
@@ -121,14 +121,24 @@ extension Ghostty {
             ghostty_app_tick(app)
         }
 
-        private static func openConfig(_ app: ghostty_app_t) {
+        private static func openConfig(_ app: ghostty_app_t, mode: ghostty_action_open_config_e) {
             guard let app_ud = ghostty_app_userdata(app) else { return }
             let app = Unmanaged<App>.fromOpaque(app_ud).takeUnretainedValue()
-            app.openConfig()
+            switch mode {
+            case GHOSTTY_ACTION_OPEN_CONFIG_SETTINGS:
+                SettingsController.shared.show(app)
+            default:
+                app.openConfig()
+            }
+        }
+
+        /// The configuration file that's opened for editing.
+        var configFilePath: String {
+            configPath ?? Ghostty.AllocatedString(ghostty_config_open_path()).string
         }
 
         func openConfig() {
-            let str = configPath ?? Ghostty.AllocatedString(ghostty_config_open_path()).string
+            let str = configFilePath
             guard !str.isEmpty else { return }
             let fileURL = URL(fileURLWithPath: str).absoluteString
             var action = ghostty_action_open_url_s()
@@ -666,7 +676,7 @@ extension Ghostty {
                 pwdChanged(app, target: target, v: action.action.pwd)
 
             case GHOSTTY_ACTION_OPEN_CONFIG:
-                openConfig(app)
+                openConfig(app, mode: action.action.open_config)
 
             case GHOSTTY_ACTION_FLOAT_WINDOW:
                 toggleFloatWindow(app, target: target, mode: action.action.float_window)

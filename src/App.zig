@@ -294,6 +294,7 @@ fn drainMailbox(self: *App, rt_app: *apprt.App) !void {
                     .open_config = switch (v) {
                         .os_open => .os_open,
                         .new_window => .new_window,
+                        .settings => .settings,
                     },
                 },
             ),
@@ -466,6 +467,7 @@ pub fn performAction(
             switch (v) {
                 .os_open => .os_open,
                 .new_window => .new_window,
+                .settings => .settings,
             },
         ),
         .reload_config => _ = try rt_app.performAction(.app, .reload_config, .{}),
@@ -589,6 +591,8 @@ pub const Message = union(enum) {
         os_open,
         /// Open the config in a new window using $EDITOR or $VISUAL
         new_window,
+        /// Open the settings window
+        settings,
     };
 };
 

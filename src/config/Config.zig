@@ -6660,7 +6660,10 @@ pub const Keybinds = struct {
         try self.set.put(
             alloc,
             .{ .key = .{ .unicode = ',' }, .mods = inputpkg.ctrlOrSuper(.{}) },
-            .{ .open_config = .default },
+            .{ .open_config = if (comptime builtin.target.os.tag.isDarwin())
+                .settings
+            else
+                .default },
         );
 
         {

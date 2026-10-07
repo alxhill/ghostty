@@ -1074,6 +1074,9 @@ pub const OpenConfig = enum(c_int) {
     /// Open the config in a new window using $EDITOR or $VISUAL
     new_window,
 
+    /// Open the settings window
+    settings,
+
     test "ghostty.h OpenConfig" {
         try lib.checkGhosttyHEnum(OpenConfig, "GHOSTTY_ACTION_OPEN_CONFIG_");
     }

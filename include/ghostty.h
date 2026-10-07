@@ -583,6 +583,28 @@ typedef struct {
   ghostty_quick_terminal_size_s secondary;
 } ghostty_config_quick_terminal_size_s;
 
+// config.schema.Kind
+typedef enum {
+  GHOSTTY_CONFIG_OPTION_BOOL,
+  GHOSTTY_CONFIG_OPTION_INT,
+  GHOSTTY_CONFIG_OPTION_FLOAT,
+  GHOSTTY_CONFIG_OPTION_ENUM,
+  GHOSTTY_CONFIG_OPTION_FLAGS,
+  GHOSTTY_CONFIG_OPTION_COLOR,
+  GHOSTTY_CONFIG_OPTION_STRING,
+} ghostty_config_option_kind_e;
+
+// config.schema.Option.C
+typedef struct {
+  const char* name;
+  const char* help;
+  ghostty_config_option_kind_e kind;
+  bool optional;
+  bool repeatable;
+  const char* const* choices;
+  uintptr_t choices_len;
+} ghostty_config_option_s;
+
 // config.Fullscreen
 typedef enum {
   GHOSTTY_CONFIG_FULLSCREEN_FALSE,
@@ -733,6 +755,8 @@ typedef enum {
   GHOSTTY_ACTION_OPEN_CONFIG_OS_OPEN,
   // Open the config in a new window using $EDITOR or $VISUAL
   GHOSTTY_ACTION_OPEN_CONFIG_NEW_WINDOW,
+  // Open the settings window
+  GHOSTTY_ACTION_OPEN_CONFIG_SETTINGS,
 } ghostty_action_open_config_e;
 
 // terminal.MouseShape
@@ -1158,6 +1182,16 @@ GHOSTTY_API bool ghostty_config_key_is_binding(ghostty_config_t, ghostty_input_k
 GHOSTTY_API uint32_t ghostty_config_diagnostics_count(ghostty_config_t);
 GHOSTTY_API ghostty_diagnostic_s ghostty_config_get_diagnostic(ghostty_config_t, uint32_t);
 GHOSTTY_API ghostty_string_s ghostty_config_open_path(void);
+GHOSTTY_API ghostty_string_s ghostty_config_default_file_paths(void);
+GHOSTTY_API uintptr_t ghostty_config_option_count(void);
+GHOSTTY_API bool ghostty_config_option(uintptr_t, ghostty_config_option_s*);
+GHOSTTY_API ghostty_string_s ghostty_config_format_value(ghostty_config_t,
+                                                         const char*,
+                                                         uintptr_t);
+GHOSTTY_API bool ghostty_config_value_changed(ghostty_config_t,
+                                              ghostty_config_t,
+                                              const char*,
+                                              uintptr_t);
 
 GHOSTTY_API ghostty_app_t ghostty_app_new(const ghostty_runtime_config_s*,
                                              ghostty_config_t);

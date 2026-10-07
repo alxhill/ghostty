@@ -710,6 +710,9 @@ pub const Action = union(enum) {
     /// * `new_window`: Launch the editor specified in `$EDITOR` or `$VISUAL` in
     ///   a new Ghostty window to edit the configuration file. GTK only. (Available
     ///   since 1.4.0.)
+    /// * `settings`: Open the settings window, which lists every option and
+    ///   edits the configuration file. macOS only; other platforms use
+    ///   `os_open` instead. This is the default `super+,` binding on macOS.
     open_config: OpenConfig,
 
     /// Reload the configuration.
@@ -1208,6 +1211,9 @@ pub const Action = union(enum) {
 
         /// Open the config in a new window using $EDITOR or $VISUAL
         new_window,
+
+        /// Open the settings window
+        settings,
 
         pub const default: OpenConfig = .os_open;
     };

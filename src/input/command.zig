@@ -593,6 +593,11 @@ fn actionCommands(action: Action.Key) []const Command {
                 .title = i18n.N_("Open Config in New Terminal Window"),
                 .description = i18n.N_("Open the config file in a new window using $EDITOR or $VISUAL."),
             },
+            .{
+                .action = .{ .open_config = .settings },
+                .title = i18n.N_("Open Settings"),
+                .description = i18n.N_("Open the settings window to view and edit every config option."),
+            },
         },
 
         .reload_config => comptime &.{.{
