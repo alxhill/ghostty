@@ -75,6 +75,13 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
         self = .other
     }
 
+    /// True if the option has an effect in the macOS app. The config doesn't
+    /// record which platforms an option supports so this is a list of the
+    /// options documented as only working with GTK or Linux.
+    static func isSupportedOnMacOS(_ name: String) -> Bool {
+        !gtkOnly.contains { matches(name, $0) }
+    }
+
     private static func matches(_ name: String, _ pattern: String) -> Bool {
         if pattern.hasSuffix("*") {
             return name.hasPrefix(pattern.dropLast())
@@ -170,5 +177,22 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
         ]),
         (.macOS, ["macos-*", "auto-update*"]),
         (.linux, ["gtk-*", "linux-*", "x11-*", "class", "async-backend"]),
+    ]
+
+    /// Option names, or prefixes ending in `*`, that only work with GTK.
+    static let gtkOnly: [String] = [
+        "gtk-*",
+        "linux-*",
+        "x11-*",
+        "class",
+        "async-backend",
+        "freetype-load-flags",
+        "app-notifications",
+        "quit-after-last-window-closed-delay",
+        "quick-terminal-keyboard-interactivity",
+        "window-subtitle",
+        "window-show-tab-bar",
+        "window-titlebar-background",
+        "window-titlebar-foreground",
     ]
 }

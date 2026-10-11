@@ -4,32 +4,54 @@ import SwiftUI
 /// A single configuration option: its name, documentation, and a control to
 /// edit it. Expanding the row shows the full documentation and, for
 /// repeatable options, an editor for each value.
-struct SettingsOptionRow: View {
-    @ObservedObject var model: SettingsModel
+///
+/// Rows don't observe the model so that a change to one option only updates
+/// its own row; the state is passed in and compared instead.
+struct SettingsOptionRow: View, Equatable {
+    let model: SettingsModel
     let option: Ghostty.ConfigOption
+    let state: SettingsModel.OptionState
+    let errors: [String]
 
     @State private var expanded = false
 
-    var body: some View {
-        let state = model.state(for: option)
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.model === rhs.model
+            && lhs.option.name == rhs.option.name
+            && lhs.state == rhs.state
+            && lhs.errors == rhs.errors
+    }
 
+    private var supported: Bool {
+        SettingsCategory.isSupportedOnMacOS(option.name)
+    }
+
+    /// Options that have no effect on macOS are greyed out.
+    private var dimming: Double {
+        supported ? 1 : 0.5
+    }
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 12) {
                 Button {
                     withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
                 } label: {
-                    summary(state)
+                    summary
                 }
                 .buttonStyle(.plain)
 
                 Spacer(minLength: 12)
 
-                if option.repeatable {
-                    Text(state.values.isEmpty ? "None" : "^[\(state.values.count) value](inflect: true)")
-                        .foregroundStyle(.secondary)
-                } else {
-                    SettingsControl(model: model, option: option, state: state)
+                Group {
+                    if option.repeatable {
+                        Text(state.values.isEmpty ? "None" : "^[\(state.values.count) value](inflect: true)")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        SettingsControl(model: model, option: option, state: state)
+                    }
                 }
+                .opacity(dimming)
 
                 Button {
                     model.reset(option)
@@ -43,7 +65,7 @@ struct SettingsOptionRow: View {
                 .disabled(!state.isSet)
             }
 
-            ForEach(model.errors(for: option), id: \.self) { error in
+            ForEach(errors, id: \.self) { error in
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.red)
@@ -51,13 +73,13 @@ struct SettingsOptionRow: View {
             }
 
             if expanded {
-                details(state)
+                details
             }
         }
         .padding(.vertical, 2)
     }
 
-    private func summary(_ state: SettingsModel.OptionState) -> some View {
+    private var summary: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: "chevron.right")
                 .font(.caption2.weight(.semibold))
@@ -68,7 +90,17 @@ struct SettingsOptionRow: View {
                 HStack(spacing: 6) {
                     Text(option.name)
                         .font(.system(.body, design: .monospaced))
-                    modifiedIndicator(state)
+                        .opacity(dimming)
+                    modifiedIndicator
+                    if !supported {
+                        Text("GTK only")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Capsule().strokeBorder(.tertiary))
+                            .help("This option only has an effect in the GTK app on Linux and FreeBSD")
+                    }
                 }
 
                 if !option.summary.isEmpty && !expanded {
@@ -77,6 +109,7 @@ struct SettingsOptionRow: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
+                        .opacity(dimming)
                 }
             }
         }
@@ -84,21 +117,16 @@ struct SettingsOptionRow: View {
     }
 
     @ViewBuilder
-    private func modifiedIndicator(_ state: SettingsModel.OptionState) -> some View {
+    private var modifiedIndicator: some View {
         if state.isSet {
             Circle()
                 .fill(Color.accentColor)
                 .frame(width: 7, height: 7)
                 .help("Set in \(state.sources.map { SettingsFormat.abbreviatedPath($0.file) }.joined(separator: ", "))")
-        } else if state.changed {
-            Circle()
-                .strokeBorder(Color.accentColor, lineWidth: 1.5)
-                .frame(width: 7, height: 7)
-                .help("Changed from the default by a theme, a command-line argument, or another option")
         }
     }
 
-    private func details(_ state: SettingsModel.OptionState) -> some View {
+    private var details: some View {
         VStack(alignment: .leading, spacing: 10) {
             if option.repeatable {
                 SettingsRepeatableEditor(model: model, option: option, state: state)
@@ -149,7 +177,7 @@ struct SettingsOptionRow: View {
 
 /// The editing control for a single-valued option.
 private struct SettingsControl: View {
-    @ObservedObject var model: SettingsModel
+    let model: SettingsModel
     let option: Ghostty.ConfigOption
     let state: SettingsModel.OptionState
 
@@ -220,7 +248,7 @@ private struct SettingsControl: View {
 
 /// A menu of checkable flags for options like `shell-integration-features`.
 private struct SettingsFlagsMenu: View {
-    @ObservedObject var model: SettingsModel
+    let model: SettingsModel
     let option: Ghostty.ConfigOption
     let state: SettingsModel.OptionState
 
@@ -252,7 +280,7 @@ private struct SettingsFlagsMenu: View {
 /// A color well paired with a text field for values that aren't plain colors,
 /// such as `cell-foreground`.
 private struct SettingsColorControl: View {
-    @ObservedObject var model: SettingsModel
+    let model: SettingsModel
     let option: Ghostty.ConfigOption
     let state: SettingsModel.OptionState
 
@@ -307,7 +335,7 @@ private struct SettingsColorControl: View {
 
 /// Edits the values of a repeatable option in each file that sets it.
 private struct SettingsRepeatableEditor: View {
-    @ObservedObject var model: SettingsModel
+    let model: SettingsModel
     let option: Ghostty.ConfigOption
     let state: SettingsModel.OptionState
 

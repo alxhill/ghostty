@@ -27,7 +27,6 @@ class SettingsModel: ObservableObject {
         var fileValue: String { sources.last?.values.last ?? value }
 
         var isSet: Bool { !sources.isEmpty }
-        var isModified: Bool { changed || isSet }
     }
 
     struct Source: Equatable {
@@ -51,6 +50,9 @@ class SettingsModel: ObservableObject {
 
     /// The categories that contain at least one option, in display order.
     let categories: [SettingsCategory]
+
+    /// The categories whose options all only work with GTK.
+    let gtkOnlyCategories: Set<SettingsCategory>
 
     @Published private(set) var states: [String: OptionState] = [:]
 
@@ -80,6 +82,10 @@ class SettingsModel: ObservableObject {
         let used = Set(categoryByOption.values)
         self.categoryByOption = categoryByOption
         self.categories = SettingsCategory.allCases.filter { used.contains($0) }
+        let supported = Set(options.filter { SettingsCategory.isSupportedOnMacOS($0.name) }.map {
+            categoryByOption[$0.name] ?? .other
+        })
+        self.gtkOnlyCategories = used.subtracting(supported)
 
         let defaults = ghostty_config_new()
         if let defaults { ghostty_config_finalize(defaults) }
@@ -107,8 +113,9 @@ class SettingsModel: ObservableObject {
         categoryByOption[option.name] ?? .other
     }
 
+    /// The number of options set in a config file.
     var modifiedCount: Int {
-        options.filter { state(for: $0).isModified }.count
+        options.filter { state(for: $0).isSet }.count
     }
 
     /// Configuration errors that mention the option.
@@ -126,7 +133,7 @@ class SettingsModel: ObservableObject {
         let matches = options.filter { option in
             switch selection {
             case .all: break
-            case .modified: guard state(for: option).isModified else { return false }
+            case .modified: guard state(for: option).isSet else { return false }
             case .category(let category):
                 // Searching looks through everything, like System Settings.
                 guard !terms.isEmpty || self.category(for: option) == category else { return false }

@@ -28,6 +28,29 @@ struct SettingsCategoryTests {
         #expect(SettingsCategory(option: name) == category)
     }
 
+    @Test(arguments: [
+        ("gtk-titlebar", false),
+        ("gtk-quick-terminal-layer", false),
+        ("window-titlebar-background", false),
+        ("class", false),
+        ("window-theme", true),
+        ("macos-titlebar-style", true),
+        ("quit-after-last-window-closed", true),
+    ])
+    func detectsGTKOnlyOptions(name: String, supported: Bool) {
+        #expect(SettingsCategory.isSupportedOnMacOS(name) == supported)
+    }
+
+    @Test func gtkOnlyOptionsExist() {
+        let names = Set(Ghostty.ConfigOption.all.map(\.name))
+        let missing = SettingsCategory.gtkOnly.filter { pattern in
+            pattern.hasSuffix("*")
+                ? !names.contains { $0.hasPrefix(pattern.dropLast()) }
+                : !names.contains(pattern)
+        }
+        #expect(missing == [])
+    }
+
     @Test func everyOptionHasACategory() {
         let uncategorized = Ghostty.ConfigOption.all
             .map(\.name)

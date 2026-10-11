@@ -37,6 +37,7 @@ struct SettingsView: View {
             Section("Categories") {
                 ForEach(model.categories) { category in
                     Label(category.title, systemImage: category.symbol)
+                        .foregroundStyle(model.gtkOnlyCategories.contains(category) ? .secondary : .primary)
                         .tag(SettingsModel.Selection.category(category))
                 }
             }
@@ -81,20 +82,44 @@ private struct SettingsDetailView: View {
             if groups.isEmpty {
                 emptyState
             } else {
-                Form {
-                    ForEach(groups) { group in
-                        Section {
-                            ForEach(group.options) { option in
-                                SettingsOptionRow(model: model, option: option)
-                            }
-                        } header: {
-                            if showsSectionHeaders {
-                                Text(group.category.title)
+                // A grouped Form lays out every row up front, which is slow
+                // with hundreds of options, so this mimics one lazily.
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(groups) { group in
+                            Section {
+                                ForEach(Array(group.options.enumerated()), id: \.element.id) { index, option in
+                                    SettingsOptionRow(
+                                        model: model,
+                                        option: option,
+                                        state: model.state(for: option),
+                                        errors: model.errors(for: option)
+                                    )
+                                    .equatable()
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 8)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(SettingsGroupBackground(
+                                        first: index == 0,
+                                        last: index == group.options.count - 1
+                                    ))
+                                }
+                            } header: {
+                                if showsSectionHeaders {
+                                    Text(group.category.title)
+                                        .font(.headline)
+                                        .padding(.horizontal, 10)
+                                        .padding(.top, 18)
+                                        .padding(.bottom, 8)
+                                } else {
+                                    Spacer().frame(height: 12)
+                                }
                             }
                         }
                     }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
                 }
-                .formStyle(.grouped)
             }
 
             Divider()
@@ -152,7 +177,7 @@ private struct SettingsDetailView: View {
                 .font(.system(size: 36))
                 .foregroundStyle(.tertiary)
             Text(selection == .modified && query.isEmpty
-                 ? "All options use their default values."
+                 ? "No options are set in your config files."
                  : "No options match \u{201C}\(query)\u{201D}.")
                 .foregroundStyle(.secondary)
         }
@@ -183,6 +208,30 @@ private struct SettingsDetailView: View {
         .font(.callout)
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+}
+
+/// The background of a row in a group of rows, rounding the group's outer
+/// corners and separating it from the row above.
+private struct SettingsGroupBackground: View {
+    let first: Bool
+    let last: Bool
+
+    private let radius: CGFloat = 8
+
+    var body: some View {
+        // Extend the rounded rectangle past the edges that join another row
+        // and clip it so only the group's outer corners are rounded.
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
+            .fill(Color.primary.opacity(0.04))
+            .padding(.top, first ? 0 : -radius)
+            .padding(.bottom, last ? 0 : -radius)
+            .clipped()
+            .overlay(alignment: .top) {
+                if !first {
+                    Divider().padding(.horizontal, 10)
+                }
+            }
     }
 }
 
