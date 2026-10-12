@@ -259,6 +259,9 @@ const Mouse = struct {
     /// only process link hover events when the mouse actually moves cells.
     link_point: ?terminal.point.Coordinate = null,
 
+    /// The id of the annotation the mouse is currently over, if any.
+    annotation_id: ?u64 = null,
+
     /// Return the left-click pin only if it still belongs to the active screen.
     fn activeLeftClickPin(self: *const Mouse, screens: *const terminal.ScreenSet) ?*terminal.Pin {
         return self.selection_gesture.validatedLeftClickPin(screens);
@@ -1120,6 +1123,8 @@ pub fn handleMessage(self: *Surface, msg: Message) !void {
 
         .redraw => self.redraw(),
 
+        .show_annotation => |id| try self.showAnnotation(id),
+
         .renderer_health => |health| self.updateRendererHealth(health),
 
         .scrollbar => |scrollbar| self.updateScrollbar(scrollbar),
@@ -1716,6 +1721,109 @@ fn mouseRefreshLinks(
         try self.queueRender();
         return;
     }
+}
+
+/// Update the hovered annotation for the given viewport position, or
+/// clear it if the position is null. The renderer state mutex must be held.
+fn mouseRefreshAnnotation(
+    self: *Surface,
+    pos_vp: ?terminal.point.Coordinate,
+) !void {
+    const screen: *terminal.Screen = self.io.terminal.screens.active;
+    const ann_: ?*const terminal.Screen.Annotation = ann: {
+        const vp = pos_vp orelse break :ann null;
+        if (screen.annotations.items.len == 0) break :ann null;
+        const pin = screen.pages.pin(.{ .viewport = vp }) orelse break :ann null;
+        break :ann screen.annotationAt(pin);
+    };
+
+    const id: ?u64 = if (ann_) |ann| ann.id else null;
+    if (id == self.mouse.annotation_id) return;
+    self.mouse.annotation_id = id;
+
+    const ann = ann_ orelse {
+        _ = try self.rt_app.performAction(
+            .{ .surface = self },
+            .annotation,
+            .{ .message = "", .kind = .hover },
+        );
+        return;
+    };
+
+    try self.performAnnotationAction(screen, ann, pos_vp.?.y, .hover);
+}
+
+/// Show the annotation with the given id, if it is visible in the viewport.
+fn showAnnotation(self: *Surface, id: u64) !void {
+    self.renderer_state.mutex.lockUncancelable(global.io());
+    defer self.renderer_state.mutex.unlock(global.io());
+
+    const screen: *terminal.Screen = self.io.terminal.screens.active;
+    const ann = screen.annotationById(id) orelse return;
+    const rows = screen.pages.rows;
+    const row = row: {
+        if (screen.pages.pointFromPin(
+            .viewport,
+            ann.range.start.*,
+        )) |pt| {
+            if (pt.viewport.y < rows) break :row pt.viewport.y;
+            return;
+        }
+        if (screen.pages.pointFromPin(
+            .viewport,
+            ann.range.end.*,
+        )) |pt| {
+            break :row @min(pt.viewport.y, rows - 1);
+        }
+        return;
+    };
+
+    try self.performAnnotationAction(screen, ann, row, .reveal);
+}
+
+/// Notify the apprt of an annotation anchored to the annotated cells on
+/// the given viewport row. The renderer state mutex must be held.
+fn performAnnotationAction(
+    self: *Surface,
+    screen: *terminal.Screen,
+    ann: *const terminal.Screen.Annotation,
+    row: u32,
+    kind: apprt.action.Annotation.Kind,
+) !void {
+    const start_x: terminal.size.CellCountInt = x: {
+        const pt = screen.pages.pointFromPin(
+            .viewport,
+            ann.range.start.*,
+        ) orelse break :x 0;
+        break :x if (pt.viewport.y == row) pt.viewport.x else 0;
+    };
+
+    // Our sizes are all scaled so we need to send the unscaled values back.
+    const content_scale = self.rt_surface.getContentScale() catch
+        apprt.ContentScale{ .x = 1, .y = 1 };
+    const cell_width: f32 = @floatFromInt(self.size.cell.width);
+    const cell_height: f32 = @floatFromInt(self.size.cell.height);
+    const padding_left: f32 = @floatFromInt(self.size.padding.left);
+    const padding_top: f32 = @floatFromInt(self.size.padding.top);
+    const x: f32 = @floatFromInt(start_x);
+    const y: f32 = @floatFromInt(row);
+
+    var stack = std.heap.stackFallback(256, self.alloc);
+    const alloc = stack.get();
+    const message = try alloc.dupeZ(u8, ann.message);
+    defer alloc.free(message);
+
+    _ = try self.rt_app.performAction(
+        .{ .surface = self },
+        .annotation,
+        .{
+            .message = message,
+            .kind = kind,
+            .x = (x * cell_width + padding_left) / content_scale.x,
+            .y = (y * cell_height + padding_top) / content_scale.y,
+            .height = cell_height / content_scale.y,
+        },
+    );
 }
 
 /// Called when our renderer health state changes.
@@ -4672,6 +4780,8 @@ pub fn cursorPosCallback(
         // Mark the link's row as dirty, but continue with updating the
         // mouse state below so we can scroll when our position is negative.
         self.renderer_state.terminal.screens.active.dirty.hyperlink_hover = true;
+
+        try self.mouseRefreshAnnotation(null);
     }
 
     // Always show the mouse again if it is hidden
@@ -4731,6 +4841,8 @@ pub fn cursorPosCallback(
         // changed underneath us, even if the mouse didn't move, we update the URL hints and state
         try self.mouseRefreshLinks(pos, pos_vp, over_link);
     }
+
+    if (pos.x >= 0 and pos.y >= 0) try self.mouseRefreshAnnotation(pos_vp);
 
     // Do a mouse report
     if (self.isMouseReporting()) report: {

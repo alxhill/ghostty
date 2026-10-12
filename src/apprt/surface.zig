@@ -160,6 +160,10 @@ pub const Message = union(enum) {
     /// Renderer pushed a new frame, redraw this surface.
     redraw,
 
+    /// An annotation with the given id was added to the active screen
+    /// and should be shown to the user.
+    show_annotation: u64,
+
     pub const ReportTitleStyle = enum {
         csi_21_t,
 

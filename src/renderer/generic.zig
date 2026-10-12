@@ -283,6 +283,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
         const HighlightTag = enum(u8) {
             search_match,
             search_match_selected,
+            annotation,
         };
         /// Swap chain which maintains multiple copies of the state needed to
         /// render a frame, so that we can start building the next frame while
@@ -1369,6 +1370,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
 
             // Data we extract out of the critical area.
             const Critical = struct {
+                annotations: []const terminal.highlight.Flattened,
                 links: terminal.RenderState.CellSet,
                 mouse: renderer.State.Mouse,
                 preedit: ?renderer.State.Preedit,
@@ -1522,7 +1524,42 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     ) catch &.{};
                 };
 
+                // Annotations visible in the viewport. These require
+                // terminal state because the ranges are tracked pins.
+                const annotations: []const terminal.highlight.Flattened = annotations: {
+                    const screen = state.terminal.screens.active;
+                    if (screen.annotations.items.len == 0) break :annotations &.{};
+
+                    var list: std.ArrayList(terminal.highlight.Flattened) = .empty;
+                    for (screen.annotations.items) |*ann| {
+                        if (ann.garbage()) continue;
+                        _ = screen.pages.pointFromPin(
+                            .viewport,
+                            ann.range.end.*,
+                        ) orelse continue;
+                        if (screen.pages.pointFromPin(
+                            .viewport,
+                            ann.range.start.*,
+                        )) |pt| if (pt.viewport.y >= screen.pages.rows) continue;
+
+                        const hl = terminal.highlight.Flattened.init(
+                            arena_alloc,
+                            ann.range.start.*,
+                            ann.range.end.*,
+                        ) catch |err| {
+                            log.warn("error flattening annotation err={}", .{err});
+                            break :annotations list.items;
+                        };
+                        list.append(arena_alloc, hl) catch |err| {
+                            log.warn("error collecting annotations err={}", .{err});
+                            break :annotations list.items;
+                        };
+                    }
+                    break :annotations list.items;
+                };
+
                 break :critical .{
+                    .annotations = annotations,
                     .links = links,
                     .mouse = state.mouse,
                     .preedit = preedit,
@@ -1593,6 +1630,15 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                         log.warn("error updating search highlights err={}", .{err});
                     };
                 }
+
+                self.terminal_state.updateHighlightsFlattened(
+                    self.alloc,
+                    @intFromEnum(HighlightTag.annotation),
+                    critical.annotations,
+                ) catch |err| {
+                    // Not a critical error, we just won't show annotations.
+                    log.warn("error updating annotation highlights err={}", .{err});
+                };
             }
 
             // From this point forward no more errors.
@@ -3061,6 +3107,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                             break :selected switch (tag) {
                                 .search_match => .search,
                                 .search_match_selected => .search_selected,
+                                .annotation => continue,
                             };
                         }
                     }
@@ -3226,10 +3273,33 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     break :underline style.flags.underline;
                 };
 
+                // Annotated cells without their own underline get a
+                // dotted yellow underline.
+                const annotated = underline == .none and annotated: {
+                    const x_compare = if (wide == .spacer_tail) x -| 1 else x;
+                    for (highlights.items) |hl| {
+                        if (@as(HighlightTag, @enumFromInt(hl.tag)) == .annotation and
+                            x_compare >= hl.range[0] and
+                            x_compare <= hl.range[1]) break :annotated true;
+                    }
+                    break :annotated false;
+                };
+
                 // We draw underlines first so that they layer underneath text.
                 // This improves readability when a colored underline is used
                 // which intersects parts of the text (descenders).
-                if (underline != .none) self.addUnderline(
+                if (annotated) self.addUnderline(
+                    @intCast(x),
+                    @intCast(y),
+                    .dotted,
+                    state.colors.palette[3],
+                    alpha,
+                ) catch |err| {
+                    log.warn(
+                        "error adding annotation underline to cell, will be invalid x={} y={}, err={}",
+                        .{ x, y, err },
+                    );
+                } else if (underline != .none) self.addUnderline(
                     @intCast(x),
                     @intCast(y),
                     underline,

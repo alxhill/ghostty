@@ -29,6 +29,9 @@ extension Ghostty {
         // The hovered URL string
         @Published var hoverUrl: String?
 
+        // The annotation currently shown over the surface, if any
+        @Published var annotation: Annotation?
+
         // The progress report (if any)
         @Published var progressReport: Action.ProgressReport?
 

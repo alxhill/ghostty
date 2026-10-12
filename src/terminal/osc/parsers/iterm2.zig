@@ -47,6 +47,28 @@ const Key = enum {
     UnicodeVersion,
 };
 
+/// An iTerm2 annotation attaches a message to a range of cells.
+///
+/// Supported forms (value of AddAnnotation / AddHiddenAnnotation):
+///
+///   message
+///   length|message
+///   message|length|x|y
+pub const Annotation = struct {
+    message: [:0]const u8,
+
+    /// The number of cells to annotate. Null means the rest of the line.
+    length: ?u32 = null,
+
+    /// The zero-based starting coordinate within the active area. Null
+    /// means the cursor position.
+    x: ?u32 = null,
+    y: ?u32 = null,
+
+    /// If true, the annotation is not shown when it is added.
+    hidden: bool,
+};
+
 // Instead of using `std.meta.stringToEnum` we set up a StaticStringMap so
 // that we can get ASCII case-insensitive lookups.
 const Map = std.StaticStringMapWithEql(Key, std.ascii.eqlIgnoreCase);
@@ -154,8 +176,22 @@ pub fn parse(parser: *Parser, _: ?u8) ?*Command {
             return &parser.command;
         },
 
-        .AddAnnotation,
-        .AddHiddenAnnotation,
+        .AddAnnotation, .AddHiddenAnnotation => {
+            const value = value_ orelse {
+                parser.command = .invalid;
+                return null;
+            };
+            const annotation = parseAnnotation(
+                value,
+                key == .AddHiddenAnnotation,
+            ) orelse {
+                parser.command = .invalid;
+                return null;
+            };
+            parser.command = .{ .iterm2_annotation = annotation };
+            return &parser.command;
+        },
+
         .Block,
         .Button,
         .ClearCapturedOutput,
@@ -195,6 +231,46 @@ pub fn parse(parser: *Parser, _: ?u8) ?*Command {
         },
     }
     return &parser.command;
+}
+
+fn parseAnnotation(value: [:0]u8, hidden: bool) ?Annotation {
+    var parts: [4][:0]u8 = undefined;
+    var count: usize = 0;
+    var start: usize = 0;
+    for (value, 0..) |c, i| {
+        if (c != '|') continue;
+        if (count == parts.len - 1) break;
+        value[i] = 0;
+        parts[count] = value[start..i :0];
+        count += 1;
+        start = i + 1;
+    }
+    parts[count] = value[start..value.len :0];
+    count += 1;
+
+    const result: Annotation = switch (count) {
+        1 => .{
+            .message = parts[0],
+            .hidden = hidden,
+        },
+        2 => .{
+            .message = parts[1],
+            .length = std.fmt.parseInt(u32, parts[0], 10) catch return null,
+            .hidden = hidden,
+        },
+        4 => .{
+            .message = parts[0],
+            .length = std.fmt.parseInt(u32, parts[1], 10) catch return null,
+            .x = std.fmt.parseInt(u32, parts[2], 10) catch return null,
+            .y = std.fmt.parseInt(u32, parts[3], 10) catch return null,
+            .hidden = hidden,
+        },
+        else => return null,
+    };
+
+    if (result.message.len == 0) return null;
+    if (result.length) |len| if (len == 0) return null;
+    return result;
 }
 
 test "OSC: 1337: test valid unimplemented key with no value" {
@@ -432,4 +508,81 @@ test "OSC: 1337: test CurrentDir with non-empty value" {
     const cmd = p.end('\x1b').?.*;
     try testing.expect(cmd == .report_pwd);
     try testing.expectEqualStrings("abc123", cmd.report_pwd.value);
+}
+
+test "OSC: 1337: AddAnnotation with message" {
+    const testing = std.testing;
+
+    var p: Parser = .init(testing.allocator);
+    defer p.deinit();
+
+    const input = "1337;AddAnnotation=hello world";
+    for (input) |ch| p.next(ch);
+
+    const cmd = p.end('\x1b').?.*;
+    try testing.expect(cmd == .iterm2_annotation);
+    const v = cmd.iterm2_annotation;
+    try testing.expectEqualStrings("hello world", v.message);
+    try testing.expect(v.length == null);
+    try testing.expect(v.x == null);
+    try testing.expect(v.y == null);
+    try testing.expect(!v.hidden);
+}
+
+test "OSC: 1337: AddHiddenAnnotation with length and message" {
+    const testing = std.testing;
+
+    var p: Parser = .init(testing.allocator);
+    defer p.deinit();
+
+    const input = "1337;AddHiddenAnnotation=5|hello";
+    for (input) |ch| p.next(ch);
+
+    const cmd = p.end('\x1b').?.*;
+    try testing.expect(cmd == .iterm2_annotation);
+    const v = cmd.iterm2_annotation;
+    try testing.expectEqualStrings("hello", v.message);
+    try testing.expectEqual(@as(?u32, 5), v.length);
+    try testing.expect(v.x == null);
+    try testing.expect(v.hidden);
+}
+
+test "OSC: 1337: AddAnnotation with message, length and coordinates" {
+    const testing = std.testing;
+
+    var p: Parser = .init(testing.allocator);
+    defer p.deinit();
+
+    const input = "1337;AddAnnotation=hello|3|4|2";
+    for (input) |ch| p.next(ch);
+
+    const cmd = p.end('\x1b').?.*;
+    try testing.expect(cmd == .iterm2_annotation);
+    const v = cmd.iterm2_annotation;
+    try testing.expectEqualStrings("hello", v.message);
+    try testing.expectEqual(@as(?u32, 3), v.length);
+    try testing.expectEqual(@as(?u32, 4), v.x);
+    try testing.expectEqual(@as(?u32, 2), v.y);
+    try testing.expect(!v.hidden);
+}
+
+test "OSC: 1337: AddAnnotation invalid forms" {
+    const testing = std.testing;
+
+    const inputs = [_][]const u8{
+        "1337;AddAnnotation",
+        "1337;AddAnnotation=",
+        "1337;AddAnnotation=abc|hello",
+        "1337;AddAnnotation=0|hello",
+        "1337;AddAnnotation=5|",
+        "1337;AddAnnotation=a|1|2",
+        "1337;AddAnnotation=a|1|2|z",
+    };
+
+    for (inputs) |input| {
+        var p: Parser = .init(testing.allocator);
+        defer p.deinit();
+        for (input) |ch| p.next(ch);
+        try testing.expect(p.end('\x1b') == null);
+    }
 }

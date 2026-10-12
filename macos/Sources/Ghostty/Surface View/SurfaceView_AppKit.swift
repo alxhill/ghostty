@@ -901,6 +901,7 @@ extension Ghostty {
         }
 
         override func mouseDown(with event: NSEvent) {
+            annotation = nil
             guard let surface = self.surface else { return }
             let mods = Ghostty.ghosttyMods(event.modifierFlags)
             ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, mods)
@@ -1056,6 +1057,8 @@ extension Ghostty {
         }
 
         override func scrollWheel(with event: NSEvent) {
+            // The annotation anchor moves with the content.
+            annotation = nil
             guard let surfaceModel else { return }
 
             var x = event.scrollingDeltaX
@@ -1106,6 +1109,11 @@ extension Ghostty {
 
             // On any keyDown event we unset our bell state
             bell = false
+
+            // Typing dismisses a revealed annotation
+            if annotation?.kind == .reveal {
+                annotation = nil
+            }
 
             // We need to translate the mods (maybe) to handle configs such as option-as-alt
             let translationModsGhostty = Ghostty.eventModifierFlags(

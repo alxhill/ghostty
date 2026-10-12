@@ -382,6 +382,7 @@ pub const StreamHandler = struct {
             .apc_put => self.apc.feed(self.alloc, value),
             .apc_put_slice => self.apc.feedSlice(self.alloc, value.bytes),
             .kitty_clipboard => try self.kittyClipboard(value),
+            .add_annotation => try self.addAnnotation(value),
 
             // Unimplemented
             .title_push,
@@ -390,6 +391,18 @@ pub const StreamHandler = struct {
             .osc_unknown,
             => {},
         }
+    }
+
+    fn addAnnotation(
+        self: *StreamHandler,
+        value: terminal.StreamAction.AddAnnotation,
+    ) !void {
+        const id = try self.terminal.addAnnotation(.{
+            .message = value.message,
+            .length = value.length,
+            .position = if (value.position) |p| .{ .x = p.x, .y = p.y } else null,
+        });
+        if (!value.hidden) self.surfaceMessageWriter(.{ .show_annotation = id });
     }
 
     pub inline fn dcsHook(self: *StreamHandler, dcs: terminal.DCS) !void {

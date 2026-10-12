@@ -171,6 +171,9 @@ pub const Command = union(Key) {
     /// produced when `Parser.unknown_max_bytes` is nonzero.
     unknown: Unknown,
 
+    /// iTerm2 annotation (OSC 1337 AddAnnotation / AddHiddenAnnotation)
+    iterm2_annotation: Iterm2Annotation,
+
     pub const SemanticPrompt = parsers.semantic_prompt.Command;
 
     pub const KittyClipboardProtocol = parsers.kitty_clipboard_protocol.OSC;
@@ -178,6 +181,8 @@ pub const Command = union(Key) {
     pub const KittyDndProtocol = parsers.kitty_dnd_protocol.OSC;
 
     pub const KittyDesktopNotification = parsers.kitty_desktop_notification.OSC;
+
+    pub const Iterm2Annotation = parsers.iterm2.Annotation;
 
     pub const Key = LibEnum(
         lib.target,
@@ -211,6 +216,7 @@ pub const Command = union(Key) {
             "context_signal",
             "kitty_desktop_notification",
             "unknown",
+            "iterm2_annotation",
         },
     );
 
@@ -541,6 +547,7 @@ pub const Parser = struct {
             .kitty_desktop_notification,
             .context_signal,
             .unknown,
+            .iterm2_annotation,
             => {},
         }
 

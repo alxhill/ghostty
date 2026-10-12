@@ -724,6 +724,12 @@ pub const Handler = struct {
             // sequences, so everything that reaches here is reported.
             .osc_unknown => self.unknownSequence(.{ .osc = value }),
 
+            .add_annotation => _ = try self.terminal.addAnnotation(.{
+                .message = value.message,
+                .length = value.length,
+                .position = if (value.position) |p| .{ .x = p.x, .y = p.y } else null,
+            }),
+
             // Effect-based handlers
             .bell => self.bell(),
             .show_desktop_notification => self.desktopNotification(value),

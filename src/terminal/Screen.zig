@@ -24,6 +24,7 @@ const point = @import("point.zig");
 const size = @import("size.zig");
 const style = @import("style.zig");
 const hyperlink = @import("hyperlink.zig");
+const highlight = @import("highlight.zig");
 const Offset = size.Offset;
 const Page = pagepkg.Page;
 const Row = pagepkg.Row;
@@ -83,6 +84,13 @@ else
 /// Semantic prompt (OSC133) state.
 semantic_prompt: SemanticPrompt = .disabled,
 
+/// Annotations (iTerm2 OSC 1337 AddAnnotation) attached to ranges of
+/// cells, oldest first. Use the annotation functions to modify this.
+annotations: std.ArrayList(Annotation) = .empty,
+
+/// The id assigned to the next annotation.
+next_annotation_id: u64 = 1,
+
 /// Dirty flags for the renderer.
 dirty: Dirty = .{},
 
@@ -95,7 +103,32 @@ pub const Dirty = packed struct {
     /// When an OSC8 hyperlink is hovered, we set the full screen as dirty
     /// because links can span multiple lines.
     hyperlink_hover: bool = false,
+
+    /// Set when annotations are added or removed.
+    annotations: bool = false,
 };
+
+/// A message attached to a range of cells.
+pub const Annotation = struct {
+    /// Unique (per screen) identifier for this annotation.
+    id: u64,
+
+    /// The annotation text. Owned by the screen.
+    message: []const u8,
+
+    /// The annotated cells, inclusive.
+    range: highlight.Tracked,
+
+    /// Returns true if the range is no longer valid, i.e. the content
+    /// it was attached to was pruned.
+    pub fn garbage(self: *const Annotation) bool {
+        return self.range.start.garbage or self.range.end.garbage;
+    }
+};
+
+/// The maximum number of annotations per screen. When exceeded, the
+/// oldest annotations are removed.
+pub const max_annotations = 1024;
 
 pub const SemanticPrompt = struct {
     /// This is flipped to true when any sort of semantic content is
@@ -351,6 +384,8 @@ pub fn deinit(self: *Screen) void {
         self.kitty_images.deinit(self.alloc, self);
     }
     self.cursor.deinit(self.alloc);
+    for (self.annotations.items) |ann| self.alloc.free(ann.message);
+    self.annotations.deinit(self.alloc);
     self.pages.deinit();
 }
 
@@ -468,6 +503,7 @@ pub fn reset(self: *Screen) void {
     self.protected_mode = .off;
     self.semantic_prompt = .disabled;
     self.clearSelection();
+    self.clearAnnotations();
 }
 
 /// Clone the screen.
@@ -979,6 +1015,7 @@ pub fn cursorDownScroll(self: *Screen) !void {
             const old_pin = self.cursor.page_pin.*;
 
             // eraseRow will shift everything below it up.
+            self.clearAnnotationsInRows(.{ .active = .{} }, .{ .active = .{} });
             try self.pages.eraseRow(.{ .active = .{} });
 
             // Note we don't need to mark anything dirty in this branch
@@ -1289,6 +1326,9 @@ pub fn cursorScrollRegionUp(self: *Screen, limit: usize) !void {
     assert(limit >= 1);
     assert(self.cursor.y >= limit);
     defer self.assertIntegrity();
+
+    const erased_row: point.Point = .{ .active = .{ .y = @intCast(self.cursor.y - limit) } };
+    self.clearAnnotationsInRows(erased_row, erased_row);
 
     const pin: *Pin = self.cursor.page_pin;
 
@@ -1696,6 +1736,7 @@ pub inline fn eraseHistory(
     bl: ?point.Point,
 ) void {
     defer self.assertIntegrity();
+    self.clearAnnotationsInRows(.{ .history = .{} }, bl);
     self.pages.eraseHistory(bl);
     self.cursorReload();
 }
@@ -1705,6 +1746,7 @@ pub inline fn eraseActive(
     y: size.CellCountInt,
 ) void {
     defer self.assertIntegrity();
+    self.clearAnnotationsInRows(.{ .active = .{} }, .{ .active = .{ .y = y } });
     self.pages.eraseActive(y);
     self.cursorReload();
 }
@@ -1722,6 +1764,8 @@ pub fn clearRows(
     protected: bool,
 ) void {
     defer self.assertIntegrity();
+
+    self.clearAnnotationsInRows(tl, bl);
 
     var it = self.pages.pageIterator(.right_down, tl, bl);
     while (it.next()) |chunk| {
@@ -2145,7 +2189,10 @@ pub inline fn resize(
     // If we have no scrollback and we shrunk our rows, we must explicitly
     // erase our history. This is because PageList always keeps at least
     // a page size of history.
-    if (self.no_scrollback) self.pages.eraseHistory(null);
+    if (self.no_scrollback) {
+        self.clearAnnotationsInRows(.{ .history = .{} }, null);
+        self.pages.eraseHistory(null);
+    }
 
     // If our cursor was updated, we do a full reload so all our cursor
     // state is correct.
@@ -2949,6 +2996,116 @@ pub fn clearSelection(self: *Screen) void {
         self.dirty.selection = true;
     }
     self.selection = null;
+}
+
+/// Add an annotation covering the cells from start to end (inclusive).
+/// Returns the id of the new annotation.
+pub fn addAnnotation(
+    self: *Screen,
+    message: []const u8,
+    start: Pin,
+    end: Pin,
+) Allocator.Error!u64 {
+    self.pruneAnnotations();
+    if (self.annotations.items.len >= max_annotations) {
+        self.removeAnnotationAt(0);
+    }
+
+    const owned = try self.alloc.dupe(u8, message);
+    errdefer self.alloc.free(owned);
+    const range: highlight.Tracked = try .init(self, start, end);
+    errdefer range.deinit(self);
+
+    const id = self.next_annotation_id;
+    try self.annotations.append(self.alloc, .{
+        .id = id,
+        .message = owned,
+        .range = range,
+    });
+    self.next_annotation_id += 1;
+    self.dirty.annotations = true;
+    return id;
+}
+
+/// Returns the annotation with the given id, if it still exists.
+pub fn annotationById(self: *const Screen, id: u64) ?*const Annotation {
+    for (self.annotations.items) |*ann| {
+        if (ann.id == id) return if (ann.garbage()) null else ann;
+    }
+    return null;
+}
+
+/// Returns the most recently added annotation that covers the given pin.
+pub fn annotationAt(self: *const Screen, p: Pin) ?*const Annotation {
+    var i: usize = self.annotations.items.len;
+    while (i > 0) {
+        i -= 1;
+        const ann = &self.annotations.items[i];
+        if (ann.garbage()) continue;
+        if (p.isBetween(ann.range.start.*, ann.range.end.*)) return ann;
+    }
+    return null;
+}
+
+/// Remove all annotations.
+pub fn clearAnnotations(self: *Screen) void {
+    if (self.annotations.items.len == 0) return;
+    for (self.annotations.items) |ann| {
+        ann.range.deinit(self);
+        self.alloc.free(ann.message);
+    }
+    self.annotations.clearRetainingCapacity();
+    self.dirty.annotations = true;
+}
+
+/// Remove any annotations whose content was pruned.
+pub fn pruneAnnotations(self: *Screen) void {
+    var i: usize = 0;
+    while (i < self.annotations.items.len) {
+        if (self.annotations.items[i].garbage()) {
+            self.removeAnnotationAt(i);
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// Remove annotations that start or end within the rows from top to bottom
+/// (inclusive). If bottom is null, this goes to the end of top's region.
+fn clearAnnotationsInRows(
+    self: *Screen,
+    tl: point.Point,
+    bl: ?point.Point,
+) void {
+    if (self.annotations.items.len == 0) return;
+
+    var top = self.pages.pin(tl) orelse return;
+    top.x = 0;
+    var bot = if (bl) |v|
+        self.pages.pin(v) orelse return
+    else
+        self.pages.getBottomRight(std.meta.activeTag(tl)) orelse return;
+    bot.x = bot.node.cols() - 1;
+
+    var i: usize = 0;
+    while (i < self.annotations.items.len) {
+        const ann = &self.annotations.items[i];
+        if (ann.garbage() or
+            ann.range.start.isBetween(top, bot) or
+            ann.range.end.isBetween(top, bot))
+        {
+            self.removeAnnotationAt(i);
+        } else {
+            i += 1;
+        }
+    }
+}
+
+fn removeAnnotationAt(self: *Screen, i: usize) void {
+    const ann = self.annotations.orderedRemove(i);
+    ann.range.deinit(self);
+    self.alloc.free(ann.message);
+    self.dirty.annotations = true;
 }
 
 pub const SelectionString = struct {

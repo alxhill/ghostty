@@ -809,6 +809,21 @@ typedef struct {
   size_t len;
 } ghostty_action_mouse_over_link_s;
 
+// apprt.action.Annotation.Kind
+typedef enum {
+  GHOSTTY_ANNOTATION_HOVER,
+  GHOSTTY_ANNOTATION_REVEAL,
+} ghostty_action_annotation_kind_e;
+
+// apprt.action.Annotation
+typedef struct {
+  const char* message;
+  ghostty_action_annotation_kind_e kind;
+  float x;
+  float y;
+  float height;
+} ghostty_action_annotation_s;
+
 // apprt.action.SizeLimit
 typedef struct {
   uint32_t min_width;
@@ -1040,6 +1055,7 @@ typedef enum {
   GHOSTTY_ACTION_COPY_TITLE_TO_CLIPBOARD,
   GHOSTTY_ACTION_MOVE_TAB_TO_NEW_WINDOW,
   GHOSTTY_ACTION_RESIZE_WINDOW,
+  GHOSTTY_ACTION_ANNOTATION,
 } ghostty_action_tag_e;
 
 typedef union {
@@ -1084,6 +1100,7 @@ typedef union {
   ghostty_action_search_selected_s search_selected;
   ghostty_action_readonly_e readonly;
   ghostty_action_open_config_e open_config;
+  ghostty_action_annotation_s annotation;
 } ghostty_action_u;
 
 typedef struct {

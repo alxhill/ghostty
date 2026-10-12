@@ -136,6 +136,7 @@ pub const Action = union(Key) {
     mouse_shape_reset,
     request_xt_checksum: xt_checksum.Request,
     xt_checksum_extension: XtChecksumExtension,
+    add_annotation: AddAnnotation,
 
     pub const Key = lib.Enum(
         lib.target,
@@ -242,6 +243,7 @@ pub const Action = union(Key) {
             "mouse_shape_reset",
             "request_xt_checksum",
             "xt_checksum_extension",
+            "add_annotation",
         },
     );
 
@@ -422,6 +424,40 @@ pub const Action = union(Key) {
             return .{
                 .title = .init(self.title),
                 .body = .init(self.body),
+            };
+        }
+    };
+
+    pub const AddAnnotation = struct {
+        message: []const u8,
+
+        /// The number of cells to annotate. Null means the rest of the line.
+        length: ?u32 = null,
+
+        /// The zero-based starting coordinate within the active area.
+        /// Null means the cursor position.
+        position: ?struct { x: u32, y: u32 } = null,
+
+        /// If true, the annotation is not shown when it is added.
+        hidden: bool = false,
+
+        pub const C = extern struct {
+            message: lib.String,
+            length: u32,
+            has_position: bool,
+            x: u32,
+            y: u32,
+            hidden: bool,
+        };
+
+        pub fn cval(self: AddAnnotation) AddAnnotation.C {
+            return .{
+                .message = .init(self.message),
+                .length = self.length orelse 0,
+                .has_position = self.position != null,
+                .x = if (self.position) |p| p.x else 0,
+                .y = if (self.position) |p| p.y else 0,
+                .hidden = self.hidden,
             };
         }
     };
@@ -2790,6 +2826,24 @@ pub fn Stream(comptime H: type) type {
                 .unknown => |v| {
                     @branchHint(.unlikely);
                     self.handler.vt(.osc_unknown, v);
+                },
+
+                .iterm2_annotation => |v| {
+                    if (!std.unicode.utf8ValidateSlice(v.message)) {
+                        @branchHint(.unlikely);
+                        log.warn("annotation: invalid utf-8, ignoring", .{});
+                        return;
+                    }
+
+                    self.handler.vt(.add_annotation, .{
+                        .message = v.message,
+                        .length = v.length,
+                        .position = if (v.x != null and v.y != null)
+                            .{ .x = v.x.?, .y = v.y.? }
+                        else
+                            null,
+                        .hidden = v.hidden,
+                    });
                 },
 
                 .conemu_sleep,

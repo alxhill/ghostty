@@ -111,6 +111,12 @@ extension Ghostty {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
 
+                if let annotation = surfaceView.annotation {
+                    SurfaceAnnotationOverlay(annotation: annotation) {
+                        surfaceView.annotation = nil
+                    }
+                }
+
                 // If we have secure input enabled and we're the focused surface and window
                 // then we want to show the secure input overlay.
                 if ghostty.config.secureInputIndication &&

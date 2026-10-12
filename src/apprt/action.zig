@@ -364,6 +364,9 @@ pub const Action = union(Key) {
     /// split or the window is fullscreen.
     resize_window: ResizeWindow,
 
+    /// Show or hide an annotation (iTerm2 OSC 1337 AddAnnotation) message.
+    annotation: Annotation,
+
     /// Sync with: ghostty_action_tag_e
     pub const Key = enum(c_int) {
         quit,
@@ -436,6 +439,7 @@ pub const Action = union(Key) {
         copy_title_to_clipboard,
         move_tab_to_new_window,
         resize_window,
+        annotation,
 
         test "ghostty.h Action.Key" {
             try lib.checkGhosttyHEnum(Key, "GHOSTTY_ACTION_");
@@ -714,6 +718,52 @@ pub const MouseOverLink = struct {
         return .{
             .url = self.url.ptr,
             .len = self.url.len,
+        };
+    }
+};
+
+pub const Annotation = struct {
+    /// The annotation message. An empty message with the hover kind
+    /// hides any hovered annotation.
+    message: [:0]const u8,
+
+    kind: Kind,
+
+    /// The start of the annotated cells on the anchor row and the row
+    /// height, in surface points with a top-left origin.
+    x: f32 = 0,
+    y: f32 = 0,
+    height: f32 = 0,
+
+    pub const Kind = enum(c_int) {
+        /// The mouse is over the annotation. Shown until the next hover.
+        hover,
+
+        /// The annotation was just added and should be shown until
+        /// dismissed by the user.
+        reveal,
+
+        test "ghostty.h Annotation.Kind" {
+            try lib.checkGhosttyHEnum(Kind, "GHOSTTY_ANNOTATION_");
+        }
+    };
+
+    // Sync with: ghostty_action_annotation_s
+    pub const C = extern struct {
+        message: [*:0]const u8,
+        kind: Kind,
+        x: f32,
+        y: f32,
+        height: f32,
+    };
+
+    pub fn cval(self: Annotation) C {
+        return .{
+            .message = self.message.ptr,
+            .kind = self.kind,
+            .x = self.x,
+            .y = self.y,
+            .height = self.height,
         };
     }
 };

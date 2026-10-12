@@ -693,6 +693,9 @@ extension Ghostty {
             case GHOSTTY_ACTION_MOUSE_OVER_LINK:
                 setMouseOverLink(app, target: target, v: action.action.mouse_over_link)
 
+            case GHOSTTY_ACTION_ANNOTATION:
+                setAnnotation(app, target: target, v: action.action.annotation)
+
             case GHOSTTY_ACTION_INITIAL_SIZE:
                 setInitialSize(app, target: target, v: action.action.initial_size)
 
@@ -2056,6 +2059,34 @@ extension Ghostty {
 
                 let buffer = Data(bytes: v.url!, count: v.len)
                 surfaceView.hoverUrl = String(data: buffer, encoding: .utf8)
+
+            default:
+                assertionFailure()
+            }
+        }
+
+        private static func setAnnotation(
+            _ app: ghostty_app_t,
+            target: ghostty_target_s,
+            v: ghostty_action_annotation_s) {
+            switch target.tag {
+            case GHOSTTY_TARGET_APP:
+                Ghostty.logger.warning("annotation does nothing with an app target")
+                return
+
+            case GHOSTTY_TARGET_SURFACE:
+                guard let surface = target.target.surface else { return }
+                guard let surfaceView = self.surfaceView(from: surface) else { return }
+                guard let annotation = Annotation(v) else {
+                    // An empty hover only hides a hovered annotation so that
+                    // revealed annotations stay until dismissed.
+                    if surfaceView.annotation?.kind == .hover {
+                        surfaceView.annotation = nil
+                    }
+                    return
+                }
+
+                surfaceView.annotation = annotation
 
             default:
                 assertionFailure()

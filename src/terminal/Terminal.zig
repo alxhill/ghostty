@@ -4958,6 +4958,39 @@ pub fn plainStringUnwrapped(self: *Terminal, alloc: Allocator) ![]const u8 {
     return try self.screens.active.dumpStringAllocUnwrapped(alloc, .{ .viewport = .{} });
 }
 
+pub const AddAnnotation = struct {
+    message: []const u8,
+
+    /// The number of cells to annotate, wrapping onto following rows.
+    /// Null means the rest of the starting row.
+    length: ?u32 = null,
+
+    /// The zero-based starting coordinate within the active area. Null
+    /// means the cursor position. Values are clamped to the active area.
+    position: ?struct { x: u32, y: u32 } = null,
+};
+
+/// Add an annotation to the active screen. The annotated range is
+/// clamped to the bottom-right of the active area. Returns the id of
+/// the new annotation.
+pub fn addAnnotation(
+    self: *Terminal,
+    opts: AddAnnotation,
+) Allocator.Error!u64 {
+    const screen = self.screens.active;
+    const x: size.CellCountInt, const y: size.CellCountInt = if (opts.position) |p| .{
+        @intCast(@min(p.x, self.cols - 1)),
+        @intCast(@min(p.y, self.rows - 1)),
+    } else .{ screen.cursor.x, screen.cursor.y };
+
+    const start = screen.pages.pin(.{ .active = .{ .x = x, .y = y } }).?;
+    const length: usize = opts.length orelse self.cols - x;
+    const end = start.rightWrap(@max(length, 1) - 1) orelse
+        screen.pages.getBottomRight(.active).?;
+
+    return try screen.addAnnotation(opts.message, start, end);
+}
+
 /// Full reset.
 ///
 /// This will attempt to free the existing screen memory but if that fails
@@ -16821,4 +16854,192 @@ test "Terminal: eraseDisplay complete ignores stale prompt on recycled row" {
     t.eraseDisplay(.complete, false);
 
     try testing.expectEqual(t.screens.active.pages.rows, t.screens.active.pages.total_rows);
+}
+
+test "Terminal: addAnnotation at cursor covers rest of line" {
+    const alloc = testing.allocator;
+    const io_impl = testing.io;
+    var t = try init(io_impl, alloc, .{ .rows = 5, .cols = 10 });
+    defer t.deinit(alloc);
+
+    try t.printString("abc");
+    const id = try t.addAnnotation(.{ .message = "hello" });
+
+    const s = t.screens.active;
+    const ann = s.annotationById(id).?;
+    try testing.expectEqualStrings("hello", ann.message);
+    try testing.expectEqual(point.Point{ .active = .{ .x = 3, .y = 0 } }, s.pages.pointFromPin(.active, ann.range.start.*).?);
+    try testing.expectEqual(point.Point{ .active = .{ .x = 9, .y = 0 } }, s.pages.pointFromPin(.active, ann.range.end.*).?);
+
+    try testing.expect(s.annotationAt(s.pages.pin(.{ .active = .{ .x = 2 } }).?) == null);
+    try testing.expectEqual(id, s.annotationAt(s.pages.pin(.{ .active = .{ .x = 3 } }).?).?.id);
+    try testing.expectEqual(id, s.annotationAt(s.pages.pin(.{ .active = .{ .x = 9 } }).?).?.id);
+    try testing.expect(s.annotationAt(s.pages.pin(.{ .active = .{ .y = 1 } }).?) == null);
+}
+
+test "Terminal: addAnnotation with position and length wraps" {
+    const alloc = testing.allocator;
+    const io_impl = testing.io;
+    var t = try init(io_impl, alloc, .{ .rows = 5, .cols = 10 });
+    defer t.deinit(alloc);
+
+    const id = try t.addAnnotation(.{
+        .message = "wrap",
+        .length = 5,
+        .position = .{ .x = 8, .y = 1 },
+    });
+
+    const s = t.screens.active;
+    const ann = s.annotationById(id).?;
+    try testing.expectEqual(point.Point{ .active = .{ .x = 8, .y = 1 } }, s.pages.pointFromPin(.active, ann.range.start.*).?);
+    try testing.expectEqual(point.Point{ .active = .{ .x = 2, .y = 2 } }, s.pages.pointFromPin(.active, ann.range.end.*).?);
+}
+
+test "Terminal: addAnnotation clamps to the active area" {
+    const alloc = testing.allocator;
+    const io_impl = testing.io;
+    var t = try init(io_impl, alloc, .{ .rows = 5, .cols = 10 });
+    defer t.deinit(alloc);
+
+    const id = try t.addAnnotation(.{
+        .message = "clamp",
+        .length = 1000,
+        .position = .{ .x = 100, .y = 100 },
+    });
+
+    const s = t.screens.active;
+    const ann = s.annotationById(id).?;
+    try testing.expectEqual(point.Point{ .active = .{ .x = 9, .y = 4 } }, s.pages.pointFromPin(.active, ann.range.start.*).?);
+    try testing.expectEqual(point.Point{ .active = .{ .x = 9, .y = 4 } }, s.pages.pointFromPin(.active, ann.range.end.*).?);
+}
+
+test "Terminal: annotation follows content into scrollback" {
+    const alloc = testing.allocator;
+    const io_impl = testing.io;
+    var t = try init(io_impl, alloc, .{ .rows = 3, .cols = 10 });
+    defer t.deinit(alloc);
+
+    try t.printString("abc");
+    const id = try t.addAnnotation(.{ .message = "hello", .length = 3, .position = .{ .x = 0, .y = 0 } });
+    try t.printString("\r\n1\r\n2\r\n3");
+
+    const s = t.screens.active;
+    const ann = s.annotationById(id).?;
+    try testing.expectEqual(point.Point{ .screen = .{ .x = 0, .y = 0 } }, s.pages.pointFromPin(.screen, ann.range.start.*).?);
+    try testing.expect(s.pages.pointFromPin(.active, ann.range.start.*) == null);
+}
+
+test "Terminal: eraseDisplay complete removes annotations" {
+    const alloc = testing.allocator;
+    const io_impl = testing.io;
+    var t = try init(io_impl, alloc, .{ .rows = 5, .cols = 10 });
+    defer t.deinit(alloc);
+
+    try t.printString("abc");
+    const id = try t.addAnnotation(.{ .message = "hello" });
+    t.eraseDisplay(.complete, false);
+    try testing.expect(t.screens.active.annotationById(id) == null);
+    try testing.expectEqual(0, t.screens.active.annotations.items.len);
+}
+
+test "Terminal: eraseDisplay below keeps annotations above" {
+    const alloc = testing.allocator;
+    const io_impl = testing.io;
+    var t = try init(io_impl, alloc, .{ .rows = 5, .cols = 10 });
+    defer t.deinit(alloc);
+
+    const keep = try t.addAnnotation(.{ .message = "keep", .position = .{ .x = 0, .y = 0 } });
+    const remove = try t.addAnnotation(.{ .message = "remove", .position = .{ .x = 0, .y = 3 } });
+    t.setCursorPos(2, 1);
+    t.eraseDisplay(.below, false);
+    try testing.expect(t.screens.active.annotationById(keep) != null);
+    try testing.expect(t.screens.active.annotationById(remove) == null);
+}
+
+test "Terminal: fullReset removes annotations" {
+    const alloc = testing.allocator;
+    const io_impl = testing.io;
+    var t = try init(io_impl, alloc, .{ .rows = 5, .cols = 10 });
+    defer t.deinit(alloc);
+
+    _ = try t.addAnnotation(.{ .message = "hello" });
+    t.fullReset();
+    try testing.expectEqual(0, t.screens.active.annotations.items.len);
+}
+
+test "Terminal: annotations are capped" {
+    const alloc = testing.allocator;
+    const io_impl = testing.io;
+    var t = try init(io_impl, alloc, .{ .rows = 5, .cols = 10 });
+    defer t.deinit(alloc);
+
+    const first = try t.addAnnotation(.{ .message = "first" });
+    for (0..Screen.max_annotations) |_| _ = try t.addAnnotation(.{ .message = "x" });
+    try testing.expectEqual(Screen.max_annotations, t.screens.active.annotations.items.len);
+    try testing.expect(t.screens.active.annotationById(first) == null);
+}
+
+test "Terminal: OSC 1337 AddAnnotation via stream" {
+    const alloc = testing.allocator;
+    const io_impl = testing.io;
+    var t = try init(io_impl, alloc, .{ .rows = 5, .cols = 10 });
+    defer t.deinit(alloc);
+
+    var s = t.vtStream();
+    defer s.deinit();
+    s.nextSlice("ab\x1b]1337;AddAnnotation=2|note\x1b\\cd");
+
+    const screen = t.screens.active;
+    try testing.expectEqual(1, screen.annotations.items.len);
+    const ann = &screen.annotations.items[0];
+    try testing.expectEqualStrings("note", ann.message);
+    try testing.expectEqual(point.Point{ .active = .{ .x = 2, .y = 0 } }, screen.pages.pointFromPin(.active, ann.range.start.*).?);
+    try testing.expectEqual(point.Point{ .active = .{ .x = 3, .y = 0 } }, screen.pages.pointFromPin(.active, ann.range.end.*).?);
+}
+
+test "Terminal: eraseActive removes annotations in erased rows" {
+    const alloc = testing.allocator;
+    const io_impl = testing.io;
+    var t = try init(io_impl, alloc, .{ .rows = 5, .cols = 10 });
+    defer t.deinit(alloc);
+
+    const erased = try t.addAnnotation(.{ .message = "erased", .length = 4, .position = .{ .x = 0, .y = 0 } });
+    const kept = try t.addAnnotation(.{ .message = "kept", .length = 4, .position = .{ .x = 0, .y = 3 } });
+    t.screens.active.eraseActive(1);
+
+    const s = t.screens.active;
+    try testing.expect(s.annotationById(erased) == null);
+    const ann = s.annotationById(kept).?;
+    try testing.expectEqual(point.Point{ .active = .{ .x = 0, .y = 1 } }, s.pages.pointFromPin(.active, ann.range.start.*).?);
+    try testing.expect(s.annotationAt(s.pages.pin(.{ .active = .{} }).?) == null);
+}
+
+test "Terminal: eraseDisplay scrollback removes annotations in history" {
+    const alloc = testing.allocator;
+    const io_impl = testing.io;
+    var t = try init(io_impl, alloc, .{ .rows = 3, .cols = 10 });
+    defer t.deinit(alloc);
+
+    const id = try t.addAnnotation(.{ .message = "old", .length = 3, .position = .{ .x = 0, .y = 0 } });
+    try t.printString("\r\n1\r\n2\r\n3\r\n4");
+    t.eraseDisplay(.scrollback, false);
+    try testing.expect(t.screens.active.annotationById(id) == null);
+    try testing.expectEqual(0, t.screens.active.annotations.items.len);
+}
+
+test "Terminal: scrolling without scrollback removes annotations scrolled off" {
+    const alloc = testing.allocator;
+    const io_impl = testing.io;
+    var t = try init(io_impl, alloc, .{ .rows = 3, .cols = 10, .max_scrollback_bytes = 0 });
+    defer t.deinit(alloc);
+
+    const top = try t.addAnnotation(.{ .message = "top", .length = 3, .position = .{ .x = 0, .y = 0 } });
+    const mid = try t.addAnnotation(.{ .message = "mid", .length = 3, .position = .{ .x = 0, .y = 1 } });
+    t.setCursorPos(3, 1);
+    try t.index();
+
+    const s = t.screens.active;
+    try testing.expect(s.annotationById(top) == null);
+    const ann = s.annotationById(mid).?;
+    try testing.expectEqual(point.Point{ .active = .{ .x = 0, .y = 0 } }, s.pages.pointFromPin(.active, ann.range.start.*).?);
 }
