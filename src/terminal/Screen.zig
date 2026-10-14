@@ -2325,6 +2325,7 @@ fn clearPromptForRedraw(
             // For `.last`, only clear the current line where the cursor is.
             // For `.true`, clear all prompt lines starting from the beginning.
             .last => {
+                self.clearAnnotationsInCursorRow(0, self.pages.cols - 1);
                 const page = self.cursor.page_pin.node.page();
                 const row = self.cursor.page_row;
                 const cells = page.getCells(row);
@@ -2345,6 +2346,14 @@ fn clearPromptForRedraw(
                         break :prompt;
                     };
                 };
+
+                if (self.annotations.items.len > 0) {
+                    var top = start;
+                    top.x = 0;
+                    if (self.pages.getBottomRight(.screen)) |bot| {
+                        self.clearAnnotationsInRange(top, bot);
+                    }
+                }
 
                 // Clear cells from our start down. We replace it with spaces,
                 // and do not physically erase the rows (eraseRows) because the
@@ -3006,7 +3015,9 @@ pub fn addAnnotation(
     start: Pin,
     end: Pin,
 ) Allocator.Error!u64 {
-    self.pruneAnnotations();
+    // Programs such as shell prompts re-add annotations when they redraw,
+    // so a new annotation replaces any it overlaps.
+    self.clearAnnotationsInRange(start, end);
     if (self.annotations.items.len >= max_annotations) {
         self.removeAnnotationAt(0);
     }
@@ -3070,8 +3081,25 @@ pub fn pruneAnnotations(self: *Screen) void {
     }
 }
 
-/// Remove annotations that start or end within the rows from top to bottom
-/// (inclusive). If bottom is null, this goes to the end of top's region.
+/// Remove annotations covering any cell from top to bottom (inclusive),
+/// along with any annotations whose content was pruned.
+pub fn clearAnnotationsInRange(self: *Screen, top: Pin, bot: Pin) void {
+    var i: usize = 0;
+    while (i < self.annotations.items.len) {
+        const ann = &self.annotations.items[i];
+        if (ann.garbage() or
+            ann.range.start.isBetween(top, bot) or
+            top.isBetween(ann.range.start.*, ann.range.end.*))
+        {
+            self.removeAnnotationAt(i);
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// Remove annotations covering any cell in the given rows (inclusive).
+/// If bottom is null, this goes to the end of top's region.
 fn clearAnnotationsInRows(
     self: *Screen,
     tl: point.Point,
@@ -3086,19 +3114,35 @@ fn clearAnnotationsInRows(
     else
         self.pages.getBottomRight(std.meta.activeTag(tl)) orelse return;
     bot.x = bot.node.cols() - 1;
+    self.clearAnnotationsInRange(top, bot);
+}
 
-    var i: usize = 0;
-    while (i < self.annotations.items.len) {
-        const ann = &self.annotations.items[i];
-        if (ann.garbage() or
-            ann.range.start.isBetween(top, bot) or
-            ann.range.end.isBetween(top, bot))
-        {
-            self.removeAnnotationAt(i);
-        } else {
-            i += 1;
-        }
-    }
+/// Remove annotations covering any cell from x0 to x1 (inclusive) on the
+/// cursor row.
+pub fn clearAnnotationsInCursorRow(
+    self: *Screen,
+    x0: size.CellCountInt,
+    x1: size.CellCountInt,
+) void {
+    if (self.annotations.items.len == 0) return;
+
+    var top = self.cursor.page_pin.*;
+    top.x = x0;
+    var bot = top;
+    bot.x = @min(x1, bot.node.cols() - 1);
+    self.clearAnnotationsInRange(top, bot);
+}
+
+/// Remove annotations covering any cell from the cursor row to the given
+/// active row (inclusive).
+pub fn clearAnnotationsBelowCursor(
+    self: *Screen,
+    bottom: size.CellCountInt,
+) void {
+    self.clearAnnotationsInRows(
+        .{ .active = .{ .y = self.cursor.y } },
+        .{ .active = .{ .y = bottom } },
+    );
 }
 
 fn removeAnnotationAt(self: *Screen, i: usize) void {
@@ -12822,4 +12866,38 @@ test "Screen: selectLine does not join lines across a recycled row" {
         defer alloc.free(contents);
         try testing.expectEqualStrings("world", contents);
     }
+}
+
+test "Screen: resize with prompt redraw removes prompt annotations" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var s = try init(io, alloc, .{ .cols = 10, .rows = 3, .max_scrollback_bytes = 5 });
+    defer s.deinit();
+
+    try s.testWriteString("ABCDE\n");
+    const output = try s.addAnnotation(
+        "output",
+        s.pages.pin(.{ .active = .{ .x = 0, .y = 0 } }).?,
+        s.pages.pin(.{ .active = .{ .x = 4, .y = 0 } }).?,
+    );
+    s.cursorSetSemanticContent(.{ .prompt = .initial });
+    const prompt = try s.addAnnotation(
+        "prompt",
+        s.pages.pin(.{ .active = .{ .x = 0, .y = 1 } }).?,
+        s.pages.pin(.{ .active = .{ .x = 0, .y = 1 } }).?,
+    );
+    try s.testWriteString("> ");
+    s.cursorSetSemanticContent(.{ .input = .clear_eol });
+    try s.testWriteString("echo");
+
+    try s.resize(.{
+        .cols = 20,
+        .rows = 3,
+        .prompt_redraw = .true,
+    });
+
+    try testing.expect(s.annotationById(output) != null);
+    try testing.expect(s.annotationById(prompt) == null);
 }

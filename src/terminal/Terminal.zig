@@ -3013,6 +3013,9 @@ pub fn insertLines(self: *Terminal, count: usize) void {
         self.screens.active.cursor.x < self.scrolling_region.left or
         self.screens.active.cursor.x > self.scrolling_region.right) return;
 
+    // Moved rows no longer line up with their annotations.
+    self.screens.active.clearAnnotationsBelowCursor(self.scrolling_region.bottom);
+
     if (comptime build_options.kitty_graphics) {
         // Scrolling dirties the images because it updates their placements pins.
         self.screens.active.kitty_images.dirty = true;
@@ -3187,6 +3190,9 @@ pub fn deleteLines(self: *Terminal, count: usize) void {
         self.screens.active.cursor.x < self.scrolling_region.left or
         self.screens.active.cursor.x > self.scrolling_region.right) return;
 
+    // Moved rows no longer line up with their annotations.
+    self.screens.active.clearAnnotationsBelowCursor(self.scrolling_region.bottom);
+
     if (comptime build_options.kitty_graphics) {
         // Scrolling dirties the images because it updates their placements pins.
         self.screens.active.kitty_images.dirty = true;
@@ -3353,6 +3359,12 @@ pub fn insertBlanks(self: *Terminal, count: usize) void {
     if (self.screens.active.cursor.x < self.scrolling_region.left or
         self.screens.active.cursor.x > self.scrolling_region.right) return;
 
+    // Shifted cells no longer line up with their annotations.
+    self.screens.active.clearAnnotationsInCursorRow(
+        self.screens.active.cursor.x,
+        self.scrolling_region.right,
+    );
+
     // If our count is larger than the remaining amount, we just erase right.
     // We only do this if we can erase the entire line (no right margin).
     // if (right_limit == self.cols and
@@ -3459,6 +3471,12 @@ pub fn deleteChars(self: *Terminal, count_req: usize) void {
     self.screens.active.splitCellBoundary(self.screens.active.cursor.x + count);
     self.screens.active.splitCellBoundary(self.scrolling_region.right + 1);
 
+    // Shifted cells no longer line up with their annotations.
+    self.screens.active.clearAnnotationsInCursorRow(
+        self.screens.active.cursor.x,
+        self.scrolling_region.right,
+    );
+
     // This is the amount of space at the right of the scroll region
     // that will NOT be blank, so we need to shift the correct cols right.
     // "scroll_amount" is the number of such cols.
@@ -3515,6 +3533,11 @@ pub fn eraseChars(self: *Terminal, count_req: usize) void {
 
     // Mark our cursor row as dirty
     self.screens.active.cursorMarkDirty();
+
+    self.screens.active.clearAnnotationsInCursorRow(
+        self.screens.active.cursor.x,
+        @intCast(@as(usize, self.screens.active.cursor.x) + count - 1),
+    );
 
     // Clear the cells
     const cells: [*]Cell = @ptrCast(self.screens.active.cursor.page_cell);
@@ -3590,6 +3613,8 @@ pub fn eraseLine(
     // All modes will clear the pending wrap state and we know we have
     // a valid mode at this point.
     self.screens.active.cursor.pending_wrap = false;
+
+    self.screens.active.clearAnnotationsInCursorRow(start, end - 1);
 
     // We always mark our row as dirty
     self.screens.active.cursorMarkDirty();
@@ -16970,11 +16995,15 @@ test "Terminal: fullReset removes annotations" {
 test "Terminal: annotations are capped" {
     const alloc = testing.allocator;
     const io_impl = testing.io;
-    var t = try init(io_impl, alloc, .{ .rows = 5, .cols = 10 });
+    var t = try init(io_impl, alloc, .{ .rows = 40, .cols = 40 });
     defer t.deinit(alloc);
 
-    const first = try t.addAnnotation(.{ .message = "first" });
-    for (0..Screen.max_annotations) |_| _ = try t.addAnnotation(.{ .message = "x" });
+    const first = try t.addAnnotation(.{ .message = "first", .length = 1, .position = .{ .x = 0, .y = 0 } });
+    for (1..Screen.max_annotations + 1) |i| _ = try t.addAnnotation(.{
+        .message = "x",
+        .length = 1,
+        .position = .{ .x = @intCast(i % 40), .y = @intCast(i / 40) },
+    });
     try testing.expectEqual(Screen.max_annotations, t.screens.active.annotations.items.len);
     try testing.expect(t.screens.active.annotationById(first) == null);
 }
@@ -17042,4 +17071,95 @@ test "Terminal: scrolling without scrollback removes annotations scrolled off" {
     try testing.expect(s.annotationById(top) == null);
     const ann = s.annotationById(mid).?;
     try testing.expectEqual(point.Point{ .active = .{ .x = 0, .y = 0 } }, s.pages.pointFromPin(.active, ann.range.start.*).?);
+}
+
+test "Terminal: eraseLine removes annotations in the erased cells" {
+    const alloc = testing.allocator;
+    const io_impl = testing.io;
+    var t = try init(io_impl, alloc, .{ .rows = 5, .cols = 10 });
+    defer t.deinit(alloc);
+
+    const left = try t.addAnnotation(.{ .message = "left", .length = 2, .position = .{ .x = 0, .y = 0 } });
+    const right = try t.addAnnotation(.{ .message = "right", .length = 2, .position = .{ .x = 6, .y = 0 } });
+    t.setCursorPos(1, 5);
+    t.eraseLine(.right, false);
+    try testing.expect(t.screens.active.annotationById(left) != null);
+    try testing.expect(t.screens.active.annotationById(right) == null);
+
+    t.eraseLine(.complete, false);
+    try testing.expect(t.screens.active.annotationById(left) == null);
+}
+
+test "Terminal: eraseLine removes annotations that wrap onto the row" {
+    const alloc = testing.allocator;
+    const io_impl = testing.io;
+    var t = try init(io_impl, alloc, .{ .rows = 5, .cols = 10 });
+    defer t.deinit(alloc);
+
+    const id = try t.addAnnotation(.{ .message = "wrap", .length = 4, .position = .{ .x = 8, .y = 0 } });
+    t.setCursorPos(2, 1);
+    t.eraseLine(.left, false);
+    try testing.expect(t.screens.active.annotationById(id) == null);
+}
+
+test "Terminal: eraseChars removes annotations in the erased cells" {
+    const alloc = testing.allocator;
+    const io_impl = testing.io;
+    var t = try init(io_impl, alloc, .{ .rows = 5, .cols = 10 });
+    defer t.deinit(alloc);
+
+    const kept = try t.addAnnotation(.{ .message = "kept", .length = 1, .position = .{ .x = 5, .y = 0 } });
+    const erased = try t.addAnnotation(.{ .message = "erased", .length = 1, .position = .{ .x = 2, .y = 0 } });
+    t.setCursorPos(1, 2);
+    t.eraseChars(2);
+    try testing.expect(t.screens.active.annotationById(kept) != null);
+    try testing.expect(t.screens.active.annotationById(erased) == null);
+}
+
+test "Terminal: deleteChars removes annotations on shifted cells" {
+    const alloc = testing.allocator;
+    const io_impl = testing.io;
+    var t = try init(io_impl, alloc, .{ .rows = 5, .cols = 10 });
+    defer t.deinit(alloc);
+
+    const before = try t.addAnnotation(.{ .message = "before", .length = 1, .position = .{ .x = 0, .y = 0 } });
+    const after = try t.addAnnotation(.{ .message = "after", .length = 1, .position = .{ .x = 8, .y = 0 } });
+    t.setCursorPos(1, 3);
+    t.deleteChars(1);
+    try testing.expect(t.screens.active.annotationById(before) != null);
+    try testing.expect(t.screens.active.annotationById(after) == null);
+}
+
+test "Terminal: insertLines removes annotations on moved rows" {
+    const alloc = testing.allocator;
+    const io_impl = testing.io;
+    var t = try init(io_impl, alloc, .{ .rows = 5, .cols = 10 });
+    defer t.deinit(alloc);
+
+    const above = try t.addAnnotation(.{ .message = "above", .length = 1, .position = .{ .x = 0, .y = 0 } });
+    const below = try t.addAnnotation(.{ .message = "below", .length = 1, .position = .{ .x = 0, .y = 3 } });
+    t.setCursorPos(2, 1);
+    t.insertLines(1);
+    try testing.expect(t.screens.active.annotationById(above) != null);
+    try testing.expect(t.screens.active.annotationById(below) == null);
+}
+
+test "Terminal: addAnnotation replaces overlapping annotations" {
+    const alloc = testing.allocator;
+    const io_impl = testing.io;
+    var t = try init(io_impl, alloc, .{ .rows = 5, .cols = 20 });
+    defer t.deinit(alloc);
+
+    // A prompt that annotates its icons and is repainted in place.
+    var s = t.vtStream();
+    defer s.deinit();
+    for (0..3) |_| s.nextSlice(
+        "\r\x1b[K\x1b]1337;AddHiddenAnnotation=1|first\x07A \x1b]1337;AddHiddenAnnotation=1|second\x07B",
+    );
+
+    const screen = t.screens.active;
+    try testing.expectEqual(2, screen.annotations.items.len);
+    try testing.expectEqualStrings("first", screen.annotationAt(screen.pages.pin(.{ .active = .{ .x = 0 } }).?).?.message);
+    try testing.expectEqualStrings("second", screen.annotationAt(screen.pages.pin(.{ .active = .{ .x = 2 } }).?).?.message);
+    try testing.expect(screen.annotationAt(screen.pages.pin(.{ .active = .{ .x = 1 } }).?) == null);
 }
